@@ -1,6 +1,6 @@
-fastapi==0.104.1
-uvicorn==0.24.0
+streamlit==1.28.0
 numpy==1.24.3
 scipy==1.11.4
 sympy==1.12
-python-multipart==0.0.6
+plotly==5.18.0
+matplotlib==3.7.2
