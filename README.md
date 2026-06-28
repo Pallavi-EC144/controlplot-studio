@@ -1,22 +1,35 @@
 # ControlPlot Studio 🎛️
 
-An interactive control system visualization platform for ECE students and engineers.
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app-name.streamlit.app)
+
+An interactive control system visualization platform built with Streamlit.
 
 ## Features
 
-- **Bode Plot** with asymptotic approximation
-- **Nyquist Plot** with frequency response
-- **Pole-Zero Map** with interactive visualization
-- **System Stability Analysis** (gain margin, phase margin)
-- **Two Input Methods**: Direct entry and Builder interface
-- **Example Library**: Pre-built transfer functions
-- **Educational Focus**: Shows actual vs approximate responses
+- **Bode Plot** with actual and asymptotic responses
+- **Nyquist Plot** with interactive frequency slider
+- **Pole-Zero Map** with stability visualization
+- **System Analysis** (gain margin, phase margin, stability)
+- **Multiple Input Methods**:
+  - Direct polynomial entry
+  - Builder interface (gain, zeros, poles)
+  - Pre-built examples library
+- **Interactive Frequency Explorer**
+- **Beautiful UI** with Plotly charts
 
-## How to Run
+## Demo
 
-### 1. Backend Setup
+[Live Demo](https://your-app-name.streamlit.app)
+
+## Installation
 
 ```bash
-cd backend
+# Clone the repository
+git clone https://github.com/yourusername/controlplot-studio.git
+cd controlplot-studio
+
+# Install dependencies
 pip install -r requirements.txt
-python app.py
+
+# Run the app
+streamlit run app.py
