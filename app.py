@@ -1,6 +1,5 @@
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy import signal
 import sympy as sp
 import plotly.graph_objects as go
@@ -55,13 +54,6 @@ st.markdown("""
     .stability-unstable {
         color: #ef4444;
         font-weight: bold;
-    }
-    .metric-card {
-        background: white;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        text-align: center;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -194,7 +186,6 @@ class ControlEngine:
             if abs(pole.imag) < 1e-10:  # Real pole
                 pole = pole.real
                 if abs(pole) > 1e-10:
-                    # Pole at -a
                     omega_c = abs(pole)
                     mag_asym -= 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
                     phase_asym -= np.degrees(np.arctan(omega/omega_c))
@@ -827,13 +818,14 @@ def main():
                 
                 # Bandwidth (where magnitude crosses -3 dB)
                 mag_linear = freq_response['mag_linear']
-                mag_normalized = mag_linear / np.max(mag_linear)
-                bw_idx = np.where(mag_normalized <= 0.707)[0]
-                if len(bw_idx) > 0:
-                    bandwidth = freq_response['omega'][bw_idx[0]]
-                    st.write(f"**Bandwidth (-3 dB):** {bandwidth:.2f} rad/s")
-                else:
-                    st.write("**Bandwidth (-3 dB):** > max frequency")
+                if len(mag_linear) > 0:
+                    mag_normalized = mag_linear / np.max(mag_linear)
+                    bw_idx = np.where(mag_normalized <= 0.707)[0]
+                    if len(bw_idx) > 0:
+                        bandwidth = freq_response['omega'][bw_idx[0]]
+                        st.write(f"**Bandwidth (-3 dB):** {bandwidth:.2f} rad/s")
+                    else:
+                        st.write("**Bandwidth (-3 dB):** > max frequency")
     
     else:
         # Show welcome message when no system is loaded
