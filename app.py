@@ -2,9 +2,11 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import sympy as sp
+import re
 
 st.set_page_config(
-    page_title="ControlPlot Studio",
+    page_title="Interactive Frequency Response Explorer",
     page_icon="🎛️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -30,12 +32,12 @@ st.markdown("""
         margin: 10px 0;
         font-family: 'Courier New', monospace;
     }
-    .step-box {
+    .contribution-box {
+        padding: 10px;
+        margin: 5px 0;
+        border-radius: 6px;
+        border-left: 3px solid;
         background: white;
-        padding: 15px;
-        border-radius: 8px;
-        border: 1px solid #e8e8f0;
-        margin: 8px 0;
     }
     .good { color: #22c55e; font-weight: bold; }
     .warning { color: #eab308; font-weight: bold; }
@@ -48,21 +50,37 @@ st.markdown("""
         text-align: center;
         font-size: 1.2rem;
     }
+    .step-number {
+        display: inline-block;
+        background: #667eea;
+        color: white;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        margin-right: 10px;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-class ControlEngine:
+class TransferFunctionAnalyzer:
+    """Educational engine that derives the transfer function mathematically"""
+    
     def __init__(self):
         self.num = [1]
         self.den = [1]
         self.poles = []
         self.zeros = []
-        self.gain = 1
-        self.standard_gain = 1  # K after standardization
+        self.original_gain = 1
+        self.standard_gain = 1
         self.corner_freqs = []
-        self.derivation_steps = []
+        self.origin_poles = 0
+        self.origin_zeros = 0
+        self.real_poles = []
+        self.real_zeros = []
+        self.complex_poles = []
+        self.complex_zeros = []
         
-    def parse_transfer_function(self, num_str, den_str):
+    def parse(self, num_str, den_str):
         try:
             if num_str.strip():
                 num = [float(x.strip()) for x in num_str.split(',') if x.strip()]
@@ -83,33 +101,244 @@ class ControlEngine:
             self.den = den
             self.poles = np.roots(den)
             self.zeros = np.roots(num)
-            self.gain = num[0] / den[0] if den[0] != 0 else 1
+            self.original_gain = num[0] / den[0] if den[0] != 0 else 1
             
-            # Calculate standard form gain K
-            # K = original_gain * product(|zeros|) / product(|poles|)
-            # Exclude poles/zeros at origin
-            self.standard_gain = self.gain
-            for z in self.zeros:
-                if abs(z.real) > 1e-10:
-                    self.standard_gain *= abs(z.real)
-            for p in self.poles:
-                if abs(p.real) > 1e-10:
-                    self.standard_gain /= abs(p.real)
-            
+            # Classify poles and zeros
+            self.origin_poles = 0
+            self.origin_zeros = 0
+            self.real_poles = []
+            self.real_zeros = []
+            self.complex_poles = []
+            self.complex_zeros = []
             self.corner_freqs = []
+            
             for p in self.poles:
-                if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
+                if abs(p.imag) < 1e-10 and abs(p.real) < 1e-10:
+                    self.origin_poles += 1
+                elif abs(p.imag) < 1e-10:
+                    self.real_poles.append(abs(p.real))
                     self.corner_freqs.append(abs(p.real))
+                else:
+                    self.complex_poles.append((abs(p.real), abs(p.imag)))
+                    self.corner_freqs.append(np.sqrt(p.real**2 + p.imag**2))
+            
             for z in self.zeros:
-                if abs(z.imag) < 1e-10 and abs(z.real) > 1e-10:
+                if abs(z.imag) < 1e-10 and abs(z.real) < 1e-10:
+                    self.origin_zeros += 1
+                elif abs(z.imag) < 1e-10:
+                    self.real_zeros.append(abs(z.real))
                     self.corner_freqs.append(abs(z.real))
+                else:
+                    self.complex_zeros.append((abs(z.real), abs(z.imag)))
+                    self.corner_freqs.append(np.sqrt(z.real**2 + z.imag**2))
+            
             self.corner_freqs.sort()
             
-            self._generate_derivation()
+            # Calculate standard gain K'
+            self.standard_gain = self.original_gain
+            for z in self.real_zeros:
+                self.standard_gain *= z
+            for p in self.real_poles:
+                self.standard_gain /= p
+            
             return True
         except Exception as e:
             st.error(f"Error: {str(e)}")
             return False
+    
+    def get_derivation(self):
+        """Generate complete mathematical derivation"""
+        steps = []
+        
+        # Step 1: Original transfer function
+        num_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(self.num)) if abs(c) > 1e-10])
+        den_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(self.den)) if abs(c) > 1e-10])
+        steps.append({
+            'title': 'Step 1: Original Transfer Function',
+            'content': f"$$H(s) = \\frac{{{num_str}}}{{{den_str}}}$$",
+            'explanation': 'This is the transfer function you entered.'
+        })
+        
+        # Step 2: Factor into poles and zeros
+        poles_str = ", ".join([f"{p.real:.2f}" if abs(p.imag) < 1e-10 else f"{p.real:.2f} ± {abs(p.imag):.2f}i" for p in self.poles])
+        zeros_str = ", ".join([f"{z.real:.2f}" if abs(z.imag) < 1e-10 else f"{z.real:.2f} ± {abs(z.imag):.2f}i" for z in self.zeros])
+        steps.append({
+            'title': 'Step 2: Poles and Zeros',
+            'content': f"**Poles:** {poles_str}\n\n**Zeros:** {zeros_str}",
+            'explanation': 'Poles and zeros determine the shape of the frequency response.'
+        })
+        
+        # Step 3: Standard Bode Form
+        steps.append({
+            'title': 'Step 3: Standard Bode Form',
+            'content': self._get_standard_form(),
+            'explanation': 'Each factor is written as (1 + s/ω_c) for easy Bode construction.'
+        })
+        
+        # Step 4: Gain
+        gain_db = 20 * np.log10(abs(self.standard_gain) + 1e-10)
+        steps.append({
+            'title': 'Step 4: Standard Gain',
+            'content': f"$$K' = {self.standard_gain:.4f} \\rightarrow {gain_db:.2f} \\text{{ dB}}$$",
+            'explanation': f"The original gain {self.original_gain:.3f} has been standardized by dividing by pole frequencies and multiplying by zero frequencies."
+        })
+        
+        # Step 5: Individual contributions
+        steps.append({
+            'title': 'Step 5: Individual Contributions',
+            'content': self._get_contributions_table(),
+            'explanation': 'Each pole and zero contributes independently to the total response.'
+        })
+        
+        # Step 6: Magnitude equation
+        steps.append({
+            'title': 'Step 6: Magnitude Equation',
+            'content': self._get_magnitude_equation(),
+            'explanation': 'The total magnitude is the product of all individual magnitudes.'
+        })
+        
+        # Step 7: Phase equation
+        steps.append({
+            'title': 'Step 7: Phase Equation',
+            'content': self._get_phase_equation(),
+            'explanation': 'The total phase is the sum of all individual phases.'
+        })
+        
+        return steps
+    
+    def _get_standard_form(self):
+        """Get standard Bode form"""
+        parts = []
+        if abs(self.standard_gain - 1) > 1e-10:
+            parts.append(f"{self.standard_gain:.4f}")
+        
+        # Zero at origin
+        if self.origin_zeros > 0:
+            parts.append("s" * self.origin_zeros)
+        
+        # Real zeros
+        for z in self.real_zeros:
+            parts.append(f"(1 + s/{z:.2f})")
+        
+        # Complex zeros
+        for z_real, z_imag in self.complex_zeros:
+            wn = np.sqrt(z_real**2 + z_imag**2)
+            zeta = z_real / wn
+            parts.append(f"(1 + 2({zeta:.2f})s/{wn:.2f} + (s/{wn:.2f})²)")
+        
+        # Denominator
+        den_parts = []
+        
+        # Pole at origin
+        if self.origin_poles > 0:
+            den_parts.append("s" * self.origin_poles)
+        
+        # Real poles
+        for p in self.real_poles:
+            den_parts.append(f"(1 + s/{p:.2f})")
+        
+        # Complex poles
+        for p_real, p_imag in self.complex_poles:
+            wn = np.sqrt(p_real**2 + p_imag**2)
+            zeta = p_real / wn
+            den_parts.append(f"(1 + 2({zeta:.2f})s/{wn:.2f} + (s/{wn:.2f})²)")
+        
+        num_str = " \\cdot ".join(parts) if parts else "1"
+        den_str = " \\cdot ".join(den_parts) if den_parts else "1"
+        
+        return f"$$H(s) = \\frac{{{num_str}}}{{{den_str}}}$$"
+    
+    def _get_contributions_table(self):
+        """Get table of individual contributions"""
+        lines = []
+        
+        # Gain
+        gain_db = 20 * np.log10(abs(self.standard_gain) + 1e-10)
+        lines.append(f"• **Gain:** {self.standard_gain:.4f} → {gain_db:.2f} dB (constant)")
+        
+        # Integrators
+        if self.origin_poles > 0:
+            lines.append(f"• **Integrator (×{self.origin_poles}):** -20 dB/dec, -90° × {self.origin_poles}")
+        
+        if self.origin_zeros > 0:
+            lines.append(f"• **Differentiator (×{self.origin_zeros}):** +20 dB/dec, +90° × {self.origin_zeros}")
+        
+        # Real poles
+        for i, p in enumerate(self.real_poles):
+            lines.append(f"• **Pole {i+1}:** at ω = {p:.2f} rad/s → -20 dB/dec after corner, phase from 0° to -90°")
+        
+        # Real zeros
+        for i, z in enumerate(self.real_zeros):
+            lines.append(f"• **Zero {i+1}:** at ω = {z:.2f} rad/s → +20 dB/dec after corner, phase from 0° to +90°")
+        
+        return "\n".join(lines)
+    
+    def _get_magnitude_equation(self):
+        """Get magnitude equation"""
+        parts = []
+        parts.append(str(abs(self.standard_gain)))
+        
+        if self.origin_zeros > 0:
+            parts.append(f"ω^{self.origin_zeros}")
+        
+        for z in self.real_zeros:
+            parts.append(f"\\sqrt{{1 + (ω/{z:.2f})²}}")
+        
+        if self.origin_poles > 0:
+            parts.append(f"\\frac{{1}}{{ω^{self.origin_poles}}}")
+        
+        for p in self.real_poles:
+            parts.append(f"\\frac{{1}}{{\\sqrt{{1 + (ω/{p:.2f})²}}}}")
+        
+        for z_real, z_imag in self.complex_zeros:
+            wn = np.sqrt(z_real**2 + z_imag**2)
+            parts.append(f"\\sqrt{{(1 - (ω/{wn:.2f})²)² + (2*{z_real/wn:.2f}*ω/{wn:.2f})²}}")
+        
+        for p_real, p_imag in self.complex_poles:
+            wn = np.sqrt(p_real**2 + p_imag**2)
+            parts.append(f"\\frac{{1}}{{\\sqrt{{(1 - (ω/{wn:.2f})²)² + (2*{p_real/wn:.2f}*ω/{wn:.2f})²}}}}")
+        
+        eq = " \\cdot ".join(parts)
+        return f"$$|H(jω)| = {eq}$$"
+    
+    def _get_phase_equation(self):
+        """Get phase equation"""
+        parts = []
+        
+        # Phase from standard gain
+        if self.standard_gain < 0:
+            parts.append("180°")
+        
+        # Phase from origin zeros (differentiators)
+        if self.origin_zeros > 0:
+            parts.append(f"+ 90° × {self.origin_zeros}")
+        
+        # Phase from origin poles (integrators)
+        if self.origin_poles > 0:
+            parts.append(f"- 90° × {self.origin_poles}")
+        
+        # Phase from real zeros
+        for z in self.real_zeros:
+            parts.append(f"+ tan⁻¹(ω/{z:.2f})")
+        
+        # Phase from real poles
+        for p in self.real_poles:
+            parts.append(f"- tan⁻¹(ω/{p:.2f})")
+        
+        # Phase from complex zeros
+        for z_real, z_imag in self.complex_zeros:
+            wn = np.sqrt(z_real**2 + z_imag**2)
+            parts.append(f"+ tan⁻¹(2*{z_real/wn:.2f}*ω/{wn:.2f} / (1 - (ω/{wn:.2f})²))")
+        
+        # Phase from complex poles
+        for p_real, p_imag in self.complex_poles:
+            wn = np.sqrt(p_real**2 + p_imag**2)
+            parts.append(f"- tan⁻¹(2*{p_real/wn:.2f}*ω/{wn:.2f} / (1 - (ω/{wn:.2f})²))")
+        
+        if not parts:
+            parts.append("0°")
+        
+        return f"$$\phi(ω) = {' + '.join(parts)}$$"
     
     def parse_from_builder(self, gain, zeros, poles):
         try:
@@ -138,116 +367,10 @@ class ControlEngine:
             num_str = ','.join([str(x) for x in num])
             den_str = ','.join([str(x) for x in den])
             
-            return self.parse_transfer_function(num_str, den_str)
+            return self.parse(num_str, den_str)
         except Exception as e:
             st.error(f"Error building: {str(e)}")
             return False
-    
-    def _generate_derivation(self):
-        """Generate step-by-step mathematical derivation"""
-        steps = []
-        
-        # Original transfer function
-        num_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(self.num)) if abs(c) > 1e-10])
-        den_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(self.den)) if abs(c) > 1e-10])
-        steps.append(f"**Original Transfer Function:**\n$$H(s) = \\frac{{{num_str}}}{{{den_str}}}$$")
-        
-        # Standard form
-        steps.append("**Standard Bode Form:**")
-        # Build standard form string
-        standard_num = []
-        standard_den = []
-        
-        for z in self.zeros:
-            if abs(z.real) > 1e-10:
-                standard_num.append(f"(1 + s/{abs(z.real):.2f})")
-            elif abs(z.real) < 1e-10:
-                standard_num.append("s")
-        
-        for p in self.poles:
-            if abs(p.real) > 1e-10:
-                standard_den.append(f"(1 + s/{abs(p.real):.2f})")
-            elif abs(p.real) < 1e-10:
-                standard_den.append("s")
-        
-        if not standard_num:
-            standard_num = ["1"]
-        if not standard_den:
-            standard_den = ["1"]
-        
-        num_str = " \\cdot ".join(standard_num)
-        den_str = " \\cdot ".join(standard_den)
-        
-        steps.append(f"$$H(s) = {self.standard_gain:.3f} \\frac{{{num_str}}}{{{den_str}}}$$")
-        
-        # Gain
-        gain_db = 20 * np.log10(abs(self.standard_gain) + 1e-10)
-        steps.append(f"**Standard Gain:** K = {self.standard_gain:.3f} → {gain_db:.2f} dB")
-        
-        # Poles and zeros
-        poles_str = ", ".join([f"{p.real:.2f}" if abs(p.imag) < 1e-10 else f"{p.real:.2f} ± {abs(p.imag):.2f}i" for p in self.poles])
-        zeros_str = ", ".join([f"{z.real:.2f}" if abs(z.imag) < 1e-10 else f"{z.real:.2f} ± {abs(z.imag):.2f}i" for z in self.zeros])
-        steps.append(f"**Poles:** {poles_str}")
-        steps.append(f"**Zeros:** {zeros_str}")
-        
-        if self.corner_freqs:
-            steps.append(f"**Corner Frequencies:** {', '.join([f'{f:.2f}' for f in self.corner_freqs])} rad/s")
-        
-        # Individual contributions
-        steps.append("**Individual Contributions:**")
-        
-        steps.append(f"• **Gain:** {self.standard_gain:.3f} → {gain_db:.2f} dB (constant)")
-        
-        for i, p in enumerate(self.poles):
-            if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
-                steps.append(f"• **Pole {i+1}:** at s = {p.real:.2f} → corner at {abs(p.real):.2f} rad/s, -20 dB/dec")
-            elif abs(p.imag) < 1e-10:
-                steps.append(f"• **Integrator:** at s = 0 → -20 dB/dec, -90° phase")
-        
-        for i, z in enumerate(self.zeros):
-            if abs(z.imag) < 1e-10 and abs(z.real) > 1e-10:
-                steps.append(f"• **Zero {i+1}:** at s = {z.real:.2f} → corner at {abs(z.real):.2f} rad/s, +20 dB/dec")
-            elif abs(z.imag) < 1e-10:
-                steps.append(f"• **Differentiator:** at s = 0 → +20 dB/dec, +90° phase")
-        
-        # Magnitude equation
-        steps.append("**Magnitude Equation (s = jω):**")
-        mag_parts = []
-        mag_parts.append(str(abs(self.standard_gain)))
-        for z in self.zeros:
-            if abs(z.real) > 1e-10:
-                mag_parts.append(f"\\sqrt{{1 + (ω/{abs(z.real):.2f})^2}}")
-        for p in self.poles:
-            if abs(p.real) > 1e-10:
-                mag_parts.append(f"\\frac{{1}}{{\\sqrt{{1 + (ω/{abs(p.real):.2f})^2}}}}")
-        
-        if any(abs(p.real) < 1e-10 for p in self.poles):
-            mag_parts.append("\\frac{1}{ω}")
-        if any(abs(z.real) < 1e-10 for z in self.zeros):
-            mag_parts.append("ω")
-        
-        mag_eq = " \\cdot ".join(mag_parts)
-        steps.append(f"$$|H(jω)| = {mag_eq}$$")
-        steps.append(f"$$|H|_{{\\text{{dB}}}} = 20\\log_{{10}}(|H(jω)|)$$")
-        
-        # Phase equation
-        steps.append("**Phase Equation:**")
-        phase_parts = []
-        for z in self.zeros:
-            if abs(z.real) > 1e-10:
-                phase_parts.append(f"+ \\tan^{{-1}}(ω/{abs(z.real):.2f})")
-        for p in self.poles:
-            if abs(p.real) > 1e-10:
-                phase_parts.append(f"- \\tan^{{-1}}(ω/{abs(p.real):.2f})")
-        if any(abs(p.real) < 1e-10 for p in self.poles):
-            phase_parts.append("- 90°")
-        if any(abs(z.real) < 1e-10 for z in self.zeros):
-            phase_parts.append("+ 90°")
-        
-        if phase_parts:
-            steps.append(f"$$\phi(ω) = {' + '.join(phase_parts)}$$")
-        
-        self.derivation_steps = steps
     
     def get_frequency_response(self, omega_min=0.0001, omega_max=100000, num_points=5000):
         omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
@@ -271,66 +394,41 @@ class ControlEngine:
     def get_individual_contributions(self, omega_min=0.0001, omega_max=100000, num_points=1000):
         omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
         contributions = []
+        colors = ['#000000', '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD']
         
-        # Standard gain contribution
+        # Gain contribution
         gain_mag = np.full(len(omega), 20 * np.log10(abs(self.standard_gain) + 1e-10))
         gain_phase = np.full(len(omega), 0.0 if self.standard_gain > 0 else -180.0)
-        contributions.append({'name': 'Gain', 'mag': gain_mag, 'phase': gain_phase, 'color': '#000000'})
+        contributions.append({'name': 'Gain', 'mag': gain_mag, 'phase': gain_phase, 'color': colors[0]})
         
-        # Poles
-        for i, p in enumerate(self.poles):
-            if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
-                mag = -20 * np.log10(np.sqrt(1 + (omega/abs(p.real))**2))
-                phase = -np.degrees(np.arctan2(omega, abs(p.real)))
-                contributions.append({'name': f'Pole {i+1}', 'mag': mag, 'phase': phase, 'color': f'#{hex(200 - i*30)[2:]:0>2s}0000'})
-            elif abs(p.imag) < 1e-10:
-                mag = -20 * np.log10(omega + 1e-10)
-                phase = -90.0 * np.ones(len(omega))
-                contributions.append({'name': 'Integrator', 'mag': mag, 'phase': phase, 'color': '#8B0000'})
+        # Origin poles (integrators)
+        if self.origin_poles > 0:
+            mag = -self.origin_poles * 20 * np.log10(omega + 1e-10)
+            phase = -self.origin_poles * 90.0 * np.ones(len(omega))
+            contributions.append({'name': f'Integrator (×{self.origin_poles})', 'mag': mag, 'phase': phase, 'color': colors[1]})
         
-        # Zeros
-        for i, z in enumerate(self.zeros):
-            if abs(z.imag) < 1e-10 and abs(z.real) > 1e-10:
-                mag = 20 * np.log10(np.sqrt(1 + (omega/abs(z.real))**2))
-                phase = np.degrees(np.arctan2(omega, abs(z.real)))
-                contributions.append({'name': f'Zero {i+1}', 'mag': mag, 'phase': phase, 'color': f'#0000{hex(200 - i*30)[2:]:0>2s}'})
-            elif abs(z.imag) < 1e-10:
-                mag = 20 * np.log10(omega + 1e-10)
-                phase = 90.0 * np.ones(len(omega))
-                contributions.append({'name': 'Differentiator', 'mag': mag, 'phase': phase, 'color': '#00008B'})
+        # Origin zeros (differentiators)
+        if self.origin_zeros > 0:
+            mag = self.origin_zeros * 20 * np.log10(omega + 1e-10)
+            phase = self.origin_zeros * 90.0 * np.ones(len(omega))
+            contributions.append({'name': f'Differentiator (×{self.origin_zeros})', 'mag': mag, 'phase': phase, 'color': colors[2]})
+        
+        # Real poles
+        for i, p in enumerate(self.real_poles):
+            mag = -20 * np.log10(np.sqrt(1 + (omega/p)**2))
+            phase = -np.degrees(np.arctan2(omega, p))
+            contributions.append({'name': f'Pole at {p:.1f}', 'mag': mag, 'phase': phase, 'color': colors[3 + i % len(colors)]})
+        
+        # Real zeros
+        for i, z in enumerate(self.real_zeros):
+            mag = 20 * np.log10(np.sqrt(1 + (omega/z)**2))
+            phase = np.degrees(np.arctan2(omega, z))
+            contributions.append({'name': f'Zero at {z:.1f}', 'mag': mag, 'phase': phase, 'color': colors[4 + i % len(colors)]})
         
         return {'omega': omega, 'contributions': contributions}
     
-    def get_asymptotic_response(self, omega_min=0.0001, omega_max=100000, num_points=1000):
-        omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
-        mag_asym = np.full(len(omega), 20 * np.log10(abs(self.standard_gain) + 1e-10))
-        phase_asym = np.full(len(omega), 0.0 if self.standard_gain > 0 else -180.0)
-        
-        for pole in self.poles:
-            if abs(pole.imag) < 1e-10:
-                p_real = pole.real
-                if abs(p_real) > 1e-10:
-                    omega_c = abs(p_real)
-                    mag_asym -= 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
-                    phase_asym -= np.degrees(np.arctan2(omega, omega_c))
-                else:
-                    mag_asym -= 20 * np.log10(omega + 1e-10)
-                    phase_asym -= 90.0
-        
-        for zero in self.zeros:
-            if abs(zero.imag) < 1e-10:
-                z_real = zero.real
-                if abs(z_real) > 1e-10:
-                    omega_c = abs(z_real)
-                    mag_asym += 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
-                    phase_asym += np.degrees(np.arctan2(omega, omega_c))
-                else:
-                    mag_asym += 20 * np.log10(omega + 1e-10)
-                    phase_asym += 90.0
-        
-        return {'omega': omega, 'mag_db': mag_asym, 'phase_deg': phase_asym}
-    
     def calculate_margins(self):
+        """Calculate margins using the CORRECT formulas"""
         fr = self.get_frequency_response()
         omega = fr['omega']
         mag_db = fr['mag_db']
@@ -341,8 +439,11 @@ class ControlEngine:
         gm_freq = None
         pm_freq = None
         
-        # --- FIX 1: Detect EXACT hits on 0 dB ---
-        # Find where magnitude crosses 0 dB (with tolerance for exact hits)
+        # --- Find GAIN CROSSOVER (where |H| = 0 dB = 1) ---
+        # Check for exact hits first
+        exact_zero_idx = np.where(np.isclose(mag_db, 0, atol=1e-6))[0]
+        
+        # Then check for crossings
         gain_cross_idx = np.where(
             (mag_db[:-1] > 0) & (mag_db[1:] <= 0)
         )[0]
@@ -350,15 +451,31 @@ class ControlEngine:
             (mag_db[:-1] < 0) & (mag_db[1:] >= 0)
         )[0]
         
-        # Check for exact hits on 0 dB
-        exact_zero_idx = np.where(np.isclose(mag_db, 0, atol=1e-6))[0]
-        
-        # Combine all gain crossover indices
         all_gain_cross = np.unique(np.concatenate([gain_cross_idx, gain_cross_idx2, exact_zero_idx]))
         all_gain_cross = all_gain_cross[all_gain_cross < len(mag_db) - 1]
         
-        # --- FIX 2: Detect EXACT hits on -180° ---
-        # Find where phase crosses -180° (with tolerance for exact hits)
+        if len(all_gain_cross) > 0:
+            idx = all_gain_cross[0]
+            if idx in exact_zero_idx:
+                # Exact hit - use directly
+                phase_margin = 180 + phase_deg[idx]
+                pm_freq = omega[idx]
+            else:
+                # Interpolate
+                x1, x2 = mag_db[idx], mag_db[idx + 1]
+                y1, y2 = phase_deg[idx], phase_deg[idx + 1]
+                if abs(x2 - x1) > 1e-10:
+                    t = (0 - x1) / (x2 - x1)
+                    if 0 <= t <= 1:
+                        pm = y1 + t * (y2 - y1)
+                        phase_margin = 180 + pm
+                        pm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
+        
+        # --- Find PHASE CROSSOVER (where phase = -180°) ---
+        # Check for exact hits first
+        exact_180_idx = np.where(np.isclose(phase_deg, -180, atol=1e-3))[0]
+        
+        # Then check for crossings
         phase_cross_idx = np.where(
             (phase_deg[:-1] > -180) & (phase_deg[1:] <= -180)
         )[0]
@@ -366,53 +483,31 @@ class ControlEngine:
             (phase_deg[:-1] < -180) & (phase_deg[1:] >= -180)
         )[0]
         
-        # Check for exact hits on -180°
-        exact_180_idx = np.where(np.isclose(phase_deg, -180, atol=1e-3))[0]
-        
-        # Combine all phase crossover indices
         all_phase_cross = np.unique(np.concatenate([phase_cross_idx, phase_cross_idx2, exact_180_idx]))
-        all_phase_cross = all_phase_cross[all_phase_cross < len(phase_deg) - 1]
+        all_phase_cross = all_phase_cross[all_phase_cross < len(mag_db) - 1]
         
-        # Process phase crossover (for gain margin)
         if len(all_phase_cross) > 0:
             idx = all_phase_cross[0]
-            if idx < len(mag_db) - 1:
-                # Check if it's an exact hit
-                if idx in exact_180_idx:
-                    gain_margin = -mag_db[idx]
-                    gm_freq = omega[idx]
-                else:
-                    x1, x2 = phase_deg[idx], phase_deg[idx + 1]
-                    y1, y2 = mag_db[idx], mag_db[idx + 1]
-                    if abs(x2 - x1) > 1e-10:
-                        t = (-180 - x1) / (x2 - x1)
-                        if 0 <= t <= 1:
-                            gm = y1 + t * (y2 - y1)
-                            gain_margin = -gm
-                            gm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
+            if idx in exact_180_idx:
+                # Exact hit - use directly
+                gain_margin = -mag_db[idx]
+                gm_freq = omega[idx]
+            else:
+                # Interpolate
+                x1, x2 = phase_deg[idx], phase_deg[idx + 1]
+                y1, y2 = mag_db[idx], mag_db[idx + 1]
+                if abs(x2 - x1) > 1e-10:
+                    t = (-180 - x1) / (x2 - x1)
+                    if 0 <= t <= 1:
+                        gm = y1 + t * (y2 - y1)
+                        gain_margin = -gm
+                        gm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
         
-        # Process gain crossover (for phase margin)
-        if len(all_gain_cross) > 0:
-            idx = all_gain_cross[0]
-            if idx < len(phase_deg) - 1:
-                # Check if it's an exact hit
-                if idx in exact_zero_idx:
-                    phase_margin = 180 + phase_deg[idx]
-                    pm_freq = omega[idx]
-                else:
-                    x1, x2 = mag_db[idx], mag_db[idx + 1]
-                    y1, y2 = phase_deg[idx], phase_deg[idx + 1]
-                    if abs(x2 - x1) > 1e-10:
-                        t = (0 - x1) / (x2 - x1)
-                        if 0 <= t <= 1:
-                            pm = y1 + t * (y2 - y1)
-                            phase_margin = 180 + pm
-                            pm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
-        
-        # Stability
+        # Determine stability
         stable_poles = all(p.real < 1e-10 for p in self.poles)
         marginal_poles = any(abs(p.real) < 1e-10 and abs(p.imag) > 0 for p in self.poles)
         
+        # Check if margins indicate stability
         if gain_margin is not None and phase_margin is not None:
             stable = (gain_margin > 0) and (phase_margin > 0) and stable_poles
         elif gain_margin is not None:
@@ -421,6 +516,10 @@ class ControlEngine:
             stable = (phase_margin > 0) and stable_poles
         else:
             stable = stable_poles
+        
+        # Special case: if phase_margin is exactly 0, it's marginally stable
+        if phase_margin is not None and abs(phase_margin) < 1e-6:
+            stable = False
         
         return {
             'gain_margin': gain_margin,
@@ -456,10 +555,39 @@ class ControlEngine:
     
     def get_bode_data(self):
         fr = self.get_frequency_response()
-        asym = self.get_asymptotic_response()
         margins = self.calculate_margins()
         pz = self.get_pz()
         contrib = self.get_individual_contributions()
+        derivation = self.get_derivation()
+        
+        # Also get asymptotic using the standard gain
+        omega = np.logspace(np.log10(0.0001), np.log10(100000), 1000)
+        mag_asym = np.full(len(omega), 20 * np.log10(abs(self.standard_gain) + 1e-10))
+        phase_asym = np.full(len(omega), 0.0 if self.standard_gain > 0 else -180.0)
+        
+        for p in self.poles:
+            if abs(p.imag) < 1e-10:
+                p_real = p.real
+                if abs(p_real) > 1e-10:
+                    omega_c = abs(p_real)
+                    mag_asym -= 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
+                    phase_asym -= np.degrees(np.arctan2(omega, omega_c))
+                else:
+                    mag_asym -= 20 * np.log10(omega + 1e-10)
+                    phase_asym -= 90.0
+        
+        for z in self.zeros:
+            if abs(z.imag) < 1e-10:
+                z_real = z.real
+                if abs(z_real) > 1e-10:
+                    omega_c = abs(z_real)
+                    mag_asym += 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
+                    phase_asym += np.degrees(np.arctan2(omega, omega_c))
+                else:
+                    mag_asym += 20 * np.log10(omega + 1e-10)
+                    phase_asym += 90.0
+        
+        asym = {'omega': omega, 'mag_db': mag_asym, 'phase_deg': phase_asym}
         
         return {
             'frequency_response': fr,
@@ -467,8 +595,10 @@ class ControlEngine:
             'margins': margins,
             'pole_zero': pz,
             'contributions': contrib,
-            'derivation': self.derivation_steps,
-            'standard_gain': self.standard_gain
+            'derivation': derivation,
+            'standard_gain': self.standard_gain,
+            'origin_poles': self.origin_poles,
+            'origin_zeros': self.origin_zeros
         }
 
 # ============================================
@@ -601,13 +731,13 @@ def create_pole_zero_plot(pz):
 
 st.markdown("""
     <div class="main-header">
-        <h1>🎛️ ControlPlot Studio</h1>
-        <p>Interactive Control System Visualization Platform</p>
+        <h1>🎛️ Interactive Frequency Response Explorer</h1>
+        <p>An educational tool that constructs Bode and Nyquist plots step by step</p>
     </div>
 """, unsafe_allow_html=True)
 
-if 'engine' not in st.session_state:
-    st.session_state.engine = ControlEngine()
+if 'analyzer' not in st.session_state:
+    st.session_state.analyzer = TransferFunctionAnalyzer()
     st.session_state.loaded = False
 
 with st.sidebar:
@@ -620,7 +750,7 @@ with st.sidebar:
         num = st.text_input("Numerator:", value="100")
         den = st.text_input("Denominator:", value="1, 30, 200")
         if st.button("🚀 Generate Plots", use_container_width=True):
-            if st.session_state.engine.parse_transfer_function(num, den):
+            if st.session_state.analyzer.parse(num, den):
                 st.session_state.loaded = True
                 st.success("✅ Loaded!")
     
@@ -643,32 +773,31 @@ with st.sidebar:
             poles_input.append(p)
         
         if st.button("🏗️ Build & Generate", use_container_width=True):
-            if st.session_state.engine.parse_from_builder(gain, zeros_input, poles_input):
+            if st.session_state.analyzer.parse_from_builder(gain, zeros_input, poles_input):
                 st.session_state.loaded = True
                 st.success("✅ Built!")
     
     else:
         st.subheader("Pre-built Examples")
         examples = {
-            "2 Poles (s+10)(s+20)": {"num": "100", "den": "1, 30, 200"},
-            "3 Poles (s+1)(s+2)(s+3)": {"num": "1", "den": "1, 6, 11, 6"},
-            "Integrator + 2 Poles": {"num": "10", "den": "1, 10, 0"},
-            "High Gain": {"num": "1000", "den": "1, 30, 200"},
-            "4th Order": {"num": "1", "den": "1, 10, 35, 50, 24"},
-            "Underdamped": {"num": "1", "den": "1, 1, 100"},
-            "Unstable": {"num": "1", "den": "1, -1, 100"},
-            "RHP Zero": {"num": "1, -1", "den": "1, 3, 2"},
-            "Double Integrator": {"num": "1", "den": "1, 0, 0"}
+            "🔷 2 Poles": {"num": "100", "den": "1, 30, 200"},
+            "🔶 3 Poles": {"num": "1", "den": "1, 6, 11, 6"},
+            "🔄 Integrator": {"num": "1", "den": "1, 0"},
+            "🔁 Double Integrator": {"num": "1", "den": "1, 0, 0"},
+            "⚡ High Gain": {"num": "1000", "den": "1, 30, 200"},
+            "⚠️ RHP Zero": {"num": "1, -1", "den": "1, 3, 2"},
+            "❌ Unstable": {"num": "1", "den": "1, -1, 100"},
+            "🎯 PID": {"num": "100, 10, 1", "den": "1, 0"}
         }
         for name, tf in examples.items():
-            if st.button(f"📂 {name}", use_container_width=True):
-                if st.session_state.engine.parse_transfer_function(tf["num"], tf["den"]):
+            if st.button(f"{name}", use_container_width=True):
+                if st.session_state.analyzer.parse(tf["num"], tf["den"]):
                     st.session_state.loaded = True
                     st.success(f"✅ {name} loaded!")
 
 if st.session_state.loaded:
-    engine = st.session_state.engine
-    data = engine.get_bode_data()
+    analyzer = st.session_state.analyzer
+    data = analyzer.get_bode_data()
     fr = data['frequency_response']
     asym = data['asymptotic']
     margins = data['margins']
@@ -676,12 +805,13 @@ if st.session_state.loaded:
     standard_gain = data['standard_gain']
     
     # Display transfer function
-    num_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(engine.num)) if abs(c) > 1e-10])
-    den_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(engine.den)) if abs(c) > 1e-10])
+    num_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(analyzer.num)) if abs(c) > 1e-10])
+    den_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(analyzer.den)) if abs(c) > 1e-10])
     st.latex(f"H(s) = \\frac{{{num_str}}}{{{den_str}}}")
     
     # Show standard gain info
-    st.caption(f"**Standard Gain:** K = {standard_gain:.4f} → {20 * np.log10(abs(standard_gain) + 1e-10):.2f} dB")
+    gain_db = 20 * np.log10(abs(standard_gain) + 1e-10)
+    st.caption(f"**Standard Gain:** K' = {standard_gain:.4f} → {gain_db:.2f} dB")
     
     # Debug info in sidebar
     with st.sidebar:
@@ -691,8 +821,9 @@ if st.session_state.loaded:
         st.markdown(f"**Max Magnitude:** {margins['max_mag']:.2f} dB")
         st.markdown(f"**Min Phase:** {margins['min_phase']:.2f}°")
         st.markdown(f"**Max Phase:** {margins['max_phase']:.2f}°")
-        st.markdown(f"**Standard Gain K:** {standard_gain:.4f}")
-        st.markdown(f"**Standard Gain dB:** {20 * np.log10(abs(standard_gain) + 1e-10):.2f} dB")
+        st.markdown(f"**Standard Gain K':** {standard_gain:.4f}")
+        st.markdown(f"**Origin Poles:** {data['origin_poles']}")
+        st.markdown(f"**Origin Zeros:** {data['origin_zeros']}")
     
     # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["📈 Bode Plot", "📝 Derivation", "🌀 Nyquist", "📍 Pole-Zero"])
@@ -720,10 +851,23 @@ if st.session_state.loaded:
         with col5:
             st.metric("PM Freq", f"{margins['pm_freq']:.2f}" if margins['pm_freq'] else "None")
         
-        # Interpretation
-        if margins['marginal']:
-            st.warning("⚠️ **Marginally Stable** - System has poles on imaginary axis")
-        elif margins['stable']:
+        # Interpretation with explanation
+        st.subheader("📖 Interpretation")
+        
+        # Show margin calculation details
+        if margins['gm_freq'] is not None:
+            st.markdown(f"**Gain Margin Calculation:**")
+            st.markdown(f"- Phase crossover at ω = {margins['gm_freq']:.4f} rad/s")
+            st.markdown(f"- Magnitude at phase crossover = {gm:.2f} dB")
+            st.markdown(f"- **GM = -({gm:.2f}) = {abs(gm):.2f} dB**")
+        
+        if margins['pm_freq'] is not None:
+            st.markdown(f"**Phase Margin Calculation:**")
+            st.markdown(f"- Gain crossover at ω = {margins['pm_freq']:.4f} rad/s")
+            st.markdown(f"- Phase at gain crossover = {margins['phase_margin_deg'] - 180:.2f}°")
+            st.markdown(f"- **PM = 180° + ({margins['phase_margin_deg'] - 180:.2f}°) = {pm:.2f}°**")
+        
+        if margins['stable']:
             if pm is not None and gm is not None:
                 if pm > 60 and gm > 10:
                     st.success("✅ **Very Stable** - Excellent stability margins")
@@ -739,39 +883,19 @@ if st.session_state.loaded:
                 else:
                     st.info("📊 **Stable** - System is stable")
         else:
-            st.error("❌ **UNSTABLE** - System has poles in right half-plane!")
+            if margins['marginal']:
+                st.warning("⚠️ **Marginally Stable** - System has poles on imaginary axis")
+            else:
+                st.error("❌ **UNSTABLE** - System has poles in right half-plane!")
     
     with tab2:
         st.subheader("📐 Mathematical Derivation")
-        for step in engine.derivation_steps:
-            if step.startswith("**") and step.endswith("**"):
-                st.markdown(step)
-            elif step.startswith("$"):
-                st.markdown(step)
-            else:
-                st.text(step)
         
-        # Frequency table
-        st.subheader("📊 Frequency Response Table")
-        freq_indices = np.logspace(0, np.log10(len(fr['omega'])-1), 10, dtype=int)
-        freq_indices = np.unique(freq_indices)
-        table_data = []
-        for idx in freq_indices:
-            table_data.append([
-                f"{fr['omega'][idx]:.3f}",
-                f"{fr['mag_db'][idx]:.2f}",
-                f"{fr['phase_deg'][idx]:.1f}",
-                f"{fr['real'][idx]:.3f}",
-                f"{fr['imag'][idx]:.3f}"
-            ])
-        
-        st.table({
-            "ω (rad/s)": [row[0] for row in table_data],
-            "|H| (dB)": [row[1] for row in table_data],
-            "Phase (°)": [row[2] for row in table_data],
-            "Real": [row[3] for row in table_data],
-            "Imag": [row[4] for row in table_data]
-        })
+        for step in data['derivation']:
+            st.markdown(f"### {step['title']}")
+            st.markdown(step['content'])
+            st.caption(step['explanation'])
+            st.markdown("---")
     
     with tab3:
         st.plotly_chart(create_nyquist_plot(fr), use_container_width=True)
@@ -795,7 +919,7 @@ else:
     st.info("👈 Load a transfer function from the sidebar to begin!")
     
     st.markdown("""
-    ### 🎯 How to use ControlPlot Studio
+    ### 🎯 How to use the Interactive Frequency Response Explorer
     
     1. **Choose an input method** from the sidebar
     2. **Enter your transfer function** or select an example
@@ -808,7 +932,16 @@ else:
     - 🌀 **Nyquist Plots** with interactive frequency slider
     - 📍 **Pole-Zero Maps** with stability analysis
     - 📊 **Frequency Response Tables** with actual values
-    - 🎓 **Interpretation** explaining what the numbers mean
+    - 🎓 **Margin Calculation** showing the actual math
+    
+    ### 💡 Try These Examples
+    
+    | System | Numerator | Denominator | Expected |
+    |--------|-----------|-------------|----------|
+    | 2 Poles | `100` | `1, 30, 200` | ∞ margins |
+    | High Gain | `1000` | `1, 30, 200` | Finite PM |
+    | Integrator | `1` | `1, 0` | PM = 90° |
+    | Double Integrator | `1` | `1, 0, 0` | GM = 0 dB, PM = 0° |
     """)
 
 if __name__ == "__main__":
