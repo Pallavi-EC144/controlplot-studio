@@ -2,17 +2,76 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import sympy as sp
+import re
 
-st.set_page_config(page_title="ControlPlot Studio", page_icon="🎛️", layout="wide")
+st.set_page_config(
+    page_title="ControlPlot Studio - Educational",
+    page_icon="🎛️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 st.markdown("""
     <style>
-    .main-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white; text-align: center; margin-bottom: 30px; }
-    .stButton > button { background: #667eea; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 500; }
-    .stButton > button:hover { background: #5a6fd6; }
+    .main-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 25px;
+        border-radius: 12px;
+        color: white;
+        text-align: center;
+        margin-bottom: 30px;
+    }
+    .main-header h1 { font-size: 2.5rem; margin-bottom: 5px; }
+    .main-header p { opacity: 0.9; font-size: 1.1rem; }
+    .derivation-box {
+        background: #f8f9fe;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 4px solid #667eea;
+        margin: 10px 0;
+        font-family: 'Courier New', monospace;
+    }
+    .step-box {
+        background: white;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #e8e8f0;
+        margin: 8px 0;
+    }
+    .step-number {
+        display: inline-block;
+        background: #667eea;
+        color: white;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        margin-right: 10px;
+    }
+    .contribution-box {
+        padding: 10px;
+        margin: 5px 0;
+        border-radius: 6px;
+        border-left: 3px solid;
+    }
     .good { color: #22c55e; font-weight: bold; }
     .warning { color: #eab308; font-weight: bold; }
     .bad { color: #ef4444; font-weight: bold; }
+    .math-block {
+        background: #f0f0f0;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 10px 0;
+        text-align: center;
+        font-size: 1.2rem;
+    }
+    .toggle-section {
+        background: white;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #e8e8f0;
+        margin: 10px 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -24,6 +83,8 @@ class ControlEngine:
         self.zeros = []
         self.gain = 1
         self.corner_freqs = []
+        self.standard_form = ""
+        self.derivation_steps = []
         
     def parse_transfer_function(self, num_str, den_str):
         try:
@@ -57,52 +118,80 @@ class ControlEngine:
                     self.corner_freqs.append(abs(z.real))
             self.corner_freqs.sort()
             
+            self._generate_derivation()
             return True
         except Exception as e:
-            st.error(f"Error parsing: {str(e)}")
+            st.error(f"Error: {str(e)}")
             return False
     
-    def parse_from_builder(self, gain, zeros, poles):
-        try:
-            gain = float(gain)
-            zeros = [float(z) for z in zeros if z and z.strip()]
-            poles = [float(p) for p in poles if p and p.strip()]
-            
-            num = [gain]
-            for z in zeros:
-                if z != 0:
-                    num = np.convolve(num, [1, z])  # CORRECTED: s + z
-                else:
-                    num = np.convolve(num, [1, 0])
-                    while len(num) > 1 and abs(num[0]) < 1e-10:
-                        num = num[1:]
-            
-            den = [1]
-            for p in poles:
-                if p != 0:
-                    den = np.convolve(den, [1, p])  # CORRECTED: s + p
-                else:
-                    den = np.convolve(den, [1, 0])
-                    while len(den) > 1 and abs(den[0]) < 1e-10:
-                        den = den[1:]
-            
-            num_str = ','.join([str(x) for x in num])
-            den_str = ','.join([str(x) for x in den])
-            
-            return self.parse_transfer_function(num_str, den_str)
-        except Exception as e:
-            st.error(f"Error building: {str(e)}")
-            return False
-    
-    def get_frequency_response(self, omega_min=0.0001, omega_max=100000, num_points=5000):
-        omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
+    def _generate_derivation(self):
+        """Generate step-by-step mathematical derivation"""
+        steps = []
         
+        # Step 1: Original transfer function
+        num_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(self.num)) if abs(c) > 1e-10])
+        den_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(self.den)) if abs(c) > 1e-10])
+        steps.append(f"**Original Transfer Function:**\n$$H(s) = \\frac{{{num_str}}}{{{den_str}}}$$")
+        
+        # Step 2: Find poles and zeros
+        poles_str = ", ".join([f"{p.real:.2f}" if abs(p.imag) < 1e-10 else f"{p.real:.2f} ± {abs(p.imag):.2f}i" for p in self.poles])
+        zeros_str = ", ".join([f"{z.real:.2f}" if abs(z.imag) < 1e-10 else f"{z.real:.2f} ± {abs(z.imag):.2f}i" for z in self.zeros])
+        steps.append(f"**Poles:** {poles_str}\n**Zeros:** {zeros_str}")
+        
+        # Step 3: Factor into standard form
+        if len(self.corner_freqs) > 0:
+            steps.append(f"**Corner Frequencies:** {', '.join([f'{f:.2f}' for f in self.corner_freqs])} rad/s")
+        
+        # Step 4: Individual contributions
+        steps.append("**Individual Contributions:**")
+        
+        # Gain
+        gain_db = 20 * np.log10(abs(self.gain) + 1e-10)
+        steps.append(f"• **Gain:** K = {self.gain:.3f} → {gain_db:.2f} dB")
+        
+        # Pole contributions
+        for i, p in enumerate(self.poles):
+            if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
+                steps.append(f"• **Pole {i+1}:** at s = {p.real:.2f} → corner frequency = {abs(p.real):.2f} rad/s, contributes -20 dB/dec")
+            elif abs(p.imag) < 1e-10:
+                steps.append(f"• **Integrator {i+1}:** at s = 0 → contributes -20 dB/dec, -90° phase")
+        
+        # Zero contributions
+        for i, z in enumerate(self.zeros):
+            if abs(z.imag) < 1e-10 and abs(z.real) > 1e-10:
+                steps.append(f"• **Zero {i+1}:** at s = {z.real:.2f} → corner frequency = {abs(z.real):.2f} rad/s, contributes +20 dB/dec")
+            elif abs(z.imag) < 1e-10:
+                steps.append(f"• **Differentiator {i+1}:** at s = 0 → contributes +20 dB/dec, +90° phase")
+        
+        # Step 5: Magnitude equation
+        steps.append("**Magnitude Equation (s = jω):**")
+        mag_eq = f"$$|H(jω)| = \\frac{{{self.gain:.3f} \\cdot \\prod |1 + jω/z_i|}}{{\\prod |1 + jω/p_i| \\cdot ω^{{n_p}}}}$$"
+        steps.append(mag_eq)
+        
+        # Step 6: Phase equation
+        steps.append("**Phase Equation:**")
+        phase_parts = []
+        for z in self.zeros:
+            if abs(z.imag) < 1e-10 and abs(z.real) > 1e-10:
+                phase_parts.append(f"+ atan(ω/{abs(z.real):.2f})")
+        for p in self.poles:
+            if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
+                phase_parts.append(f"- atan(ω/{abs(p.real):.2f})")
+        if any(abs(p.imag) < 1e-10 and abs(p.real) < 1e-10 for p in self.poles):
+            phase_parts.append("- 90°")
+        if any(abs(z.imag) < 1e-10 and abs(z.real) < 1e-10 for z in self.zeros):
+            phase_parts.append("+ 90°")
+        steps.append(f"$$\phi(ω) = {' + '.join(phase_parts)}$$")
+        
+        self.derivation_steps = steps
+    
+    def get_frequency_response(self, omega_min=0.001, omega_max=100000, num_points=5000):
+        omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
         s = 1j * omega
         H = np.polyval(self.num, s) / np.polyval(self.den, s)
         
+        mag_db = 20 * np.log10(np.abs(H) + 1e-10)
         mag_linear = np.abs(H)
-        mag_db = 20 * np.log10(mag_linear + 1e-10)
-        
         phase_rad = np.unwrap(np.angle(H))
         phase_deg = np.degrees(phase_rad)
         
@@ -115,9 +204,44 @@ class ControlEngine:
             'imag': np.imag(H)
         }
     
-    def get_asymptotic_response(self, omega_min=0.0001, omega_max=100000, num_points=1000):
+    def get_individual_contributions(self, omega_min=0.001, omega_max=100000, num_points=1000):
+        """Get individual pole/zero contributions for educational display"""
         omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
+        contributions = []
         
+        # Gain
+        gain_mag = np.full(len(omega), 20 * np.log10(abs(self.gain) + 1e-10))
+        gain_phase = np.full(len(omega), 0.0 if self.gain > 0 else -180.0)
+        contributions.append({'name': 'Gain', 'mag': gain_mag, 'phase': gain_phase, 'color': '#000000'})
+        
+        # Poles
+        for i, p in enumerate(self.poles):
+            if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
+                mag = -20 * np.log10(np.sqrt(1 + (omega/abs(p.real))**2))
+                phase = -np.degrees(np.arctan2(omega, abs(p.real)))
+                contributions.append({'name': f'Pole {i+1} (ω={abs(p.real):.1f})', 
+                                    'mag': mag, 'phase': phase, 'color': f'#{hex(255 - i*30)[2:]:0>2s}0000'})
+            elif abs(p.imag) < 1e-10:
+                mag = -20 * np.log10(omega + 1e-10)
+                phase = -90.0 * np.ones(len(omega))
+                contributions.append({'name': f'Integrator {i+1}', 'mag': mag, 'phase': phase, 'color': '#8B0000'})
+        
+        # Zeros
+        for i, z in enumerate(self.zeros):
+            if abs(z.imag) < 1e-10 and abs(z.real) > 1e-10:
+                mag = 20 * np.log10(np.sqrt(1 + (omega/abs(z.real))**2))
+                phase = np.degrees(np.arctan2(omega, abs(z.real)))
+                contributions.append({'name': f'Zero {i+1} (ω={abs(z.real):.1f})', 
+                                    'mag': mag, 'phase': phase, 'color': f'#0000{hex(255 - i*30)[2:]:0>2s}'})
+            elif abs(z.imag) < 1e-10:
+                mag = 20 * np.log10(omega + 1e-10)
+                phase = 90.0 * np.ones(len(omega))
+                contributions.append({'name': f'Differentiator {i+1}', 'mag': mag, 'phase': phase, 'color': '#00008B'})
+        
+        return {'omega': omega, 'contributions': contributions}
+    
+    def get_asymptotic_response(self, omega_min=0.001, omega_max=100000, num_points=1000):
+        omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
         mag_asym = np.full(len(omega), 20 * np.log10(abs(self.gain) + 1e-10))
         phase_asym = np.full(len(omega), 0.0 if self.gain > 0 else -180.0)
         
@@ -151,47 +275,28 @@ class ControlEngine:
         mag_db = fr['mag_db']
         phase_deg = fr['phase_deg']
         
-        # ===== DEBUG OUTPUT IN SIDEBAR =====
-        st.sidebar.markdown("### 📊 Debug Values")
-        st.sidebar.markdown(f"**Min Magnitude:** {np.min(mag_db):.2f} dB")
-        st.sidebar.markdown(f"**Max Magnitude:** {np.max(mag_db):.2f} dB")
-        st.sidebar.markdown(f"**Min Phase:** {np.min(phase_deg):.2f}°")
-        st.sidebar.markdown(f"**Max Phase:** {np.max(phase_deg):.2f}°")
-        st.sidebar.markdown(f"**Phase crosses -180°?** {'✅' if np.min(phase_deg) < -180 else '❌'}")
-        st.sidebar.markdown(f"**Magnitude crosses 0dB?** {'✅' if np.min(mag_db) < 0 < np.max(mag_db) else '❌'}")
-        
-        # Find gain crossover (0 dB) - MORE ROBUST
+        # Robust crossover detection
         gain_cross_idx = np.where(
-            (mag_db[:-1] > 0) & 
-            (mag_db[1:] <= 0)
+            (mag_db[:-1] > 0) & (mag_db[1:] <= 0)
         )[0]
         gain_cross_idx2 = np.where(
-            (mag_db[:-1] < 0) & 
-            (mag_db[1:] >= 0)
+            (mag_db[:-1] < 0) & (mag_db[1:] >= 0)
         )[0]
         all_gain_cross = np.unique(np.concatenate([gain_cross_idx, gain_cross_idx2]))
         
-        st.sidebar.markdown(f"**Gain crossover indices:** {len(all_gain_cross)}")
-        
-        # Find phase crossover (-180°) - MORE ROBUST
         phase_cross_idx = np.where(
-            (phase_deg[:-1] > -180) & 
-            (phase_deg[1:] <= -180)
+            (phase_deg[:-1] > -180) & (phase_deg[1:] <= -180)
         )[0]
         phase_cross_idx2 = np.where(
-            (phase_deg[:-1] < -180) & 
-            (phase_deg[1:] >= -180)
+            (phase_deg[:-1] < -180) & (phase_deg[1:] >= -180)
         )[0]
         all_phase_cross = np.unique(np.concatenate([phase_cross_idx, phase_cross_idx2]))
-        
-        st.sidebar.markdown(f"**Phase crossover indices:** {len(all_phase_cross)}")
         
         gain_margin = None
         phase_margin = None
         gm_freq = None
         pm_freq = None
         
-        # Process phase crossover
         if len(all_phase_cross) > 0:
             idx = all_phase_cross[0]
             if idx < len(mag_db) - 1:
@@ -203,12 +308,7 @@ class ControlEngine:
                         gm = y1 + t * (y2 - y1)
                         gain_margin = -gm
                         gm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
-                        st.sidebar.markdown(f"**✅ GM:** {gain_margin:.2f} dB at {gm_freq:.2f} rad/s")
         
-        if gain_margin is None:
-            st.sidebar.markdown("**❌ No Gain Margin**")
-        
-        # Process gain crossover
         if len(all_gain_cross) > 0:
             idx = all_gain_cross[0]
             if idx < len(phase_deg) - 1:
@@ -220,12 +320,7 @@ class ControlEngine:
                         pm = y1 + t * (y2 - y1)
                         phase_margin = 180 + pm
                         pm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
-                        st.sidebar.markdown(f"**✅ PM:** {phase_margin:.2f}° at {pm_freq:.2f} rad/s")
         
-        if phase_margin is None:
-            st.sidebar.markdown("**❌ No Phase Margin**")
-        
-        # Stability
         stable_poles = all(p.real < 1e-10 for p in self.poles)
         marginal_poles = any(abs(p.real) < 1e-10 and abs(p.imag) > 0 for p in self.poles)
         
@@ -275,35 +370,73 @@ class ControlEngine:
         asym = self.get_asymptotic_response()
         margins = self.calculate_margins()
         pz = self.get_pz()
+        contrib = self.get_individual_contributions()
         
         return {
             'frequency_response': fr,
             'asymptotic': asym,
             'margins': margins,
-            'pole_zero': pz
+            'pole_zero': pz,
+            'contributions': contrib,
+            'derivation': self.derivation_steps
         }
 
-# Plotting functions (same as before - keep them)
-def create_bode_plot(data):
+def create_bode_plot_with_contributions(data, show_contributions=True):
     fr = data['frequency_response']
     asym = data['asymptotic']
     margins = data['margins']
+    contrib = data['contributions']
     
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-                        subplot_titles=('Magnitude Response', 'Phase Response'))
+                        subplot_titles=('Magnitude Response (dB)', 'Phase Response (degrees)'))
     
-    fig.add_trace(go.Scatter(x=fr['omega'], y=fr['mag_db'], mode='lines',
-                  name='Actual Magnitude', line=dict(color='#2563eb', width=2.5)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=asym['omega'], y=asym['mag_db'], mode='lines',
-                  name='Asymptotic', line=dict(color='#22c55e', width=2, dash='dash')), row=1, col=1)
-    fig.add_trace(go.Scatter(x=fr['omega'], y=fr['phase_deg'], mode='lines',
-                  name='Actual Phase', line=dict(color='#dc2626', width=2.5)), row=2, col=1)
-    fig.add_trace(go.Scatter(x=asym['omega'], y=asym['phase_deg'], mode='lines',
-                  name='Asymptotic Phase', line=dict(color='#f59e0b', width=2, dash='dash')), row=2, col=1)
+    # Individual contributions (if enabled)
+    if show_contributions:
+        for c in contrib['contributions']:
+            fig.add_trace(
+                go.Scatter(x=contrib['omega'], y=c['mag'], mode='lines',
+                          name=f'{c["name"]} (mag)', line=dict(color=c['color'], width=1.5, dash='dot'),
+                          showlegend=False),
+                row=1, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=contrib['omega'], y=c['phase'], mode='lines',
+                          name=f'{c["name"]} (phase)', line=dict(color=c['color'], width=1.5, dash='dot'),
+                          showlegend=False),
+                row=2, col=1
+            )
     
+    # Actual response
+    fig.add_trace(
+        go.Scatter(x=fr['omega'], y=fr['mag_db'], mode='lines',
+                  name='Actual Magnitude', line=dict(color='#2563eb', width=3)),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(x=fr['omega'], y=fr['phase_deg'], mode='lines',
+                  name='Actual Phase', line=dict(color='#dc2626', width=3)),
+        row=2, col=1
+    )
+    
+    # Asymptotic approximation
+    fig.add_trace(
+        go.Scatter(x=asym['omega'], y=asym['mag_db'], mode='lines',
+                  name='Asymptotic', line=dict(color='#22c55e', width=2, dash='dash')),
+        row=1, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(x=asym['omega'], y=asym['phase_deg'], mode='lines',
+                  name='Asymptotic Phase', line=dict(color='#f59e0b', width=2, dash='dash')),
+        row=2, col=1
+    )
+    
+    # Reference lines
     fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5, row=1, col=1)
     fig.add_hline(y=-180, line_dash="dot", line_color="gray", opacity=0.5, row=2, col=1)
     
+    # Margin markers
     if margins['gm_freq'] is not None:
         fig.add_vline(x=margins['gm_freq'], line_dash="dash", line_color="green", 
                      annotation_text=f"GM: {margins['gain_margin_dB']:.2f} dB", row=1, col=1)
@@ -317,6 +450,7 @@ def create_bode_plot(data):
     fig.update_yaxes(title_text='Phase (degrees)', gridcolor='#f0f0f0', row=2, col=1)
     fig.update_layout(height=600, hovermode='closest', showlegend=True,
                      legend=dict(x=1.02, y=1, bgcolor='rgba(255,255,255,0.8)'))
+    
     return fig
 
 def create_nyquist_plot(fr):
@@ -375,6 +509,7 @@ st.markdown("""
     <div class="main-header">
         <h1>🎛️ ControlPlot Studio</h1>
         <p>Interactive Control System Visualization Platform</p>
+        <p style="font-size:0.9rem; opacity:0.8;">Learn WHY the plot looks the way it does</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -382,6 +517,7 @@ if 'engine' not in st.session_state:
     st.session_state.engine = ControlEngine()
     st.session_state.loaded = False
 
+# Sidebar
 with st.sidebar:
     st.header("📥 Input Methods")
     method = st.radio("Choose Method", ["Direct Entry", "Builder Interface", "Example Library"])
@@ -389,8 +525,9 @@ with st.sidebar:
     
     if method == "Direct Entry":
         st.subheader("Transfer Function")
-        num = st.text_input("Numerator:", value="100")
-        den = st.text_input("Denominator:", value="1, 30, 200")
+        st.caption("Enter polynomial coefficients (descending powers of s)")
+        num = st.text_input("Numerator:", value="10")
+        den = st.text_input("Denominator:", value="1, 3, 2")
         if st.button("🚀 Generate Plots", use_container_width=True):
             if st.session_state.engine.parse_transfer_function(num, den):
                 st.session_state.loaded = True
@@ -398,118 +535,220 @@ with st.sidebar:
     
     elif method == "Builder Interface":
         st.subheader("Build Your System")
-        gain = st.number_input("Gain:", value=100.0, step=0.1)
+        st.caption("Enter positive numbers for LHP poles/zeros")
         
-        st.write("**Zeros (enter positive for LHP):**")
+        gain = st.number_input("Gain:", value=10.0, step=0.1)
+        
+        st.write("**Zeros (s + z):**")
         zeros_input = []
-        num_zeros = st.number_input("Number of zeros:", min_value=0, max_value=5, value=0, step=1)
+        num_zeros = st.number_input("Number of zeros:", min_value=0, max_value=5, value=1, step=1)
         for i in range(num_zeros):
-            z = st.text_input(f"Zero {i+1}:", value="")
+            z = st.text_input(f"Zero {i+1}:", value="2" if i == 0 else "")
             zeros_input.append(z)
         
-        st.write("**Poles (enter positive for LHP):**")
+        st.write("**Poles (s + p):**")
         poles_input = []
         num_poles = st.number_input("Number of poles:", min_value=0, max_value=5, value=2, step=1)
         for i in range(num_poles):
-            p = st.text_input(f"Pole {i+1}:", value="10" if i == 0 else "20")
+            p = st.text_input(f"Pole {i+1}:", value="1" if i == 0 else "5" if i == 1 else "")
             poles_input.append(p)
         
         if st.button("🏗️ Build & Generate", use_container_width=True):
-            if st.session_state.engine.parse_from_builder(gain, zeros_input, poles_input):
-                st.session_state.loaded = True
-                st.success("✅ Built!")
+            try:
+                z_vals = [float(z) for z in zeros_input if z and z.strip()]
+                p_vals = [float(p) for p in poles_input if p and p.strip()]
+                
+                num = [gain]
+                for z in z_vals:
+                    if z != 0:
+                        num = np.convolve(num, [1, z])
+                    else:
+                        num = np.convolve(num, [1, 0])
+                        while len(num) > 1 and abs(num[0]) < 1e-10:
+                            num = num[1:]
+                
+                den = [1]
+                for p in p_vals:
+                    if p != 0:
+                        den = np.convolve(den, [1, p])
+                    else:
+                        den = np.convolve(den, [1, 0])
+                        while len(den) > 1 and abs(den[0]) < 1e-10:
+                            den = den[1:]
+                
+                num_str = ','.join([str(x) for x in num])
+                den_str = ','.join([str(x) for x in den])
+                
+                if st.session_state.engine.parse_transfer_function(num_str, den_str):
+                    st.session_state.loaded = True
+                    st.success("✅ Built!")
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
     
     else:
         st.subheader("Pre-built Examples")
         examples = {
-            "2 Poles (s+10)(s+20)": {"num": "100", "den": "1, 30, 200"},
-            "3 Poles (s+1)(s+2)(s+3)": {"num": "1", "den": "1, 6, 11, 6"},
-            "Integrator + 2 Poles": {"num": "10", "den": "1, 10, 0"},
-            "High Gain": {"num": "100", "den": "1, 10, 20, 1"},
-            "4th Order": {"num": "1", "den": "1, 10, 35, 50, 24"},
-            "Underdamped": {"num": "1", "den": "1, 1, 100"},
-            "Unstable": {"num": "1", "den": "1, -1, 100"},
-            "RHP Zero": {"num": "1, -1", "den": "1, 3, 2"}
+            "🏠 RC Low Pass": {"num": "1", "den": "1, 1"},
+            "📈 RC High Pass": {"num": "1, 0", "den": "1, 1"},
+            "🔷 2 Poles": {"num": "10", "den": "1, 3, 2"},
+            "🔶 3 Poles": {"num": "1", "den": "1, 6, 11, 6"},
+            "🔄 Integrator + Poles": {"num": "10", "den": "1, 10, 0"},
+            "⚠️ RHP Zero": {"num": "1, -1", "den": "1, 3, 2"},
+            "❌ Unstable": {"num": "1", "den": "1, -1, 100"},
+            "🎯 PID Controller": {"num": "100, 10, 1", "den": "1, 0"}
         }
         for name, tf in examples.items():
-            if st.button(f"📂 {name}", use_container_width=True):
+            if st.button(f"{name}", use_container_width=True):
                 if st.session_state.engine.parse_transfer_function(tf["num"], tf["den"]):
                     st.session_state.loaded = True
                     st.success(f"✅ {name} loaded!")
 
 if st.session_state.loaded:
     engine = st.session_state.engine
+    data = engine.get_bode_data()
+    fr = data['frequency_response']
+    asym = data['asymptotic']
+    margins = data['margins']
+    pz = data['pole_zero']
     
-    try:
-        data = engine.get_bode_data()
-        fr = data['frequency_response']
-        asym = data['asymptotic']
-        margins = data['margins']
-        pz = data['pole_zero']
-        
-        num_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(engine.num)) if abs(c) > 1e-10])
-        den_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(engine.den)) if abs(c) > 1e-10])
-        if not num_str:
-            num_str = "0"
-        if not den_str:
-            den_str = "0"
-        
-        st.latex(f"H(s) = \\frac{{{num_str}}}{{{den_str}}}")
-        
-        st.sidebar.markdown("---")
-        st.sidebar.markdown("### 🔍 System Info")
-        st.sidebar.markdown(f"**Poles:** {[f'{p:.2f}' for p in engine.poles]}")
-        st.sidebar.markdown(f"**Zeros:** {[f'{z:.2f}' for z in engine.zeros]}")
-        st.sidebar.markdown(f"**Gain K:** {engine.gain:.3f}")
-        st.sidebar.markdown(f"**Corner Freqs:** {engine.corner_freqs}")
-        
-        tab1, tab2, tab3 = st.tabs(["📈 Bode Plot", "🌀 Nyquist Plot", "📍 Pole-Zero Map"])
-        
-        with tab1:
-            st.plotly_chart(create_bode_plot(data), use_container_width=True)
-            
-            st.subheader("📊 System Metrics")
-            
-            gm = margins['gain_margin_dB']
-            pm = margins['phase_margin_deg']
-            
-            gm_str = f"{gm:.2f} dB" if gm is not None else "∞"
-            pm_str = f"{pm:.2f}°" if pm is not None else "∞"
-            
-            c1, c2, c3, c4, c5 = st.columns(5)
-            if margins['marginal']:
-                c1.metric("Stability", "⚠️ Marginally Stable")
-            else:
-                c1.metric("Stability", "✅ Stable" if margins['stable'] else "❌ Unstable")
-            c2.metric("Gain Margin", gm_str)
-            c3.metric("Phase Margin", pm_str)
-            c4.metric("GM Frequency", f"{margins['gm_freq']:.2f} rad/s" if margins['gm_freq'] else "None")
-            c5.metric("PM Frequency", f"{margins['pm_freq']:.2f} rad/s" if margins['pm_freq'] else "None")
-        
-        with tab2:
-            st.plotly_chart(create_nyquist_plot(fr), use_container_width=True)
-            idx = st.slider("Frequency Index", 0, len(fr['omega'])-1, len(fr['omega'])//2)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("ω", f"{fr['omega'][idx]:.2f} rad/s")
-            c2.metric("Magnitude", f"{fr['mag_db'][idx]:.2f} dB")
-            c3.metric("Phase", f"{fr['phase_deg'][idx]:.1f}°")
-            c4.metric("H(jω)", f"{fr['real'][idx]:.3f} + {fr['imag'][idx]:.3f}i")
-        
-        with tab3:
-            st.plotly_chart(create_pole_zero_plot(pz), use_container_width=True)
-            if margins['marginal']:
-                st.warning("⚠️ Marginally Stable")
-            elif margins['stable']:
-                st.success("✅ Stable")
-            else:
-                st.error("❌ Unstable")
+    # Display transfer function
+    num_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(engine.num)) if abs(c) > 1e-10])
+    den_str = " + ".join([f"{c:.3f}s^{i}" for i, c in enumerate(reversed(engine.den)) if abs(c) > 1e-10])
+    st.latex(f"H(s) = \\frac{{{num_str}}}{{{den_str}}}")
     
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-        st.info("Try a different transfer function")
+    # Display corner frequencies
+    if engine.corner_freqs:
+        st.caption(f"**Corner Frequencies:** {', '.join([f'{f:.2f}' for f in engine.corner_freqs])} rad/s")
+    
+    # Tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 Bode Plot", "📝 Derivation", "🌀 Nyquist", "📍 Pole-Zero"])
+    
+    with tab1:
+        # Toggle for contributions
+        show_contrib = st.checkbox("Show Individual Pole/Zero Contributions", value=True)
+        st.plotly_chart(create_bode_plot_with_contributions(data, show_contrib), use_container_width=True)
+        
+        # Metrics
+        col1, col2, col3, col4, col5 = st.columns(5)
+        gm = margins['gain_margin_dB']
+        pm = margins['phase_margin_deg']
+        
+        with col1:
+            if margins['marginal']:
+                st.metric("Stability", "⚠️ Marginal")
+            else:
+                st.metric("Stability", "✅ Stable" if margins['stable'] else "❌ Unstable")
+        with col2:
+            st.metric("Gain Margin", f"{gm:.2f} dB" if gm is not None else "∞")
+        with col3:
+            st.metric("Phase Margin", f"{pm:.2f}°" if pm is not None else "∞")
+        with col4:
+            st.metric("GM Freq", f"{margins['gm_freq']:.2f}" if margins['gm_freq'] else "None")
+        with col5:
+            st.metric("PM Freq", f"{margins['pm_freq']:.2f}" if margins['pm_freq'] else "None")
+    
+    with tab2:
+        st.subheader("📐 Mathematical Derivation")
+        
+        # Show each derivation step
+        for step in engine.derivation_steps:
+            if step.startswith("**"):
+                st.markdown(step)
+            elif step.startswith("$"):
+                st.markdown(step)
+            else:
+                st.markdown(step)
+        
+        # Frequency table
+        st.subheader("📊 Frequency Response Table")
+        
+        # Create a nice frequency table
+        freq_indices = np.logspace(0, np.log10(len(fr['omega'])-1), 10, dtype=int)
+        table_data = []
+        for idx in freq_indices:
+            table_data.append([
+                f"{fr['omega'][idx]:.3f}",
+                f"{fr['mag_db'][idx]:.2f}",
+                f"{fr['phase_deg'][idx]:.1f}",
+                f"{fr['real'][idx]:.3f}",
+                f"{fr['imag'][idx]:.3f}"
+            ])
+        
+        st.table({
+            "ω (rad/s)": [row[0] for row in table_data],
+            "|H| (dB)": [row[1] for row in table_data],
+            "Phase (°)": [row[2] for row in table_data],
+            "Real": [row[3] for row in table_data],
+            "Imag": [row[4] for row in table_data]
+        })
+        
+        # Interpretation
+        st.subheader("🎓 Interpretation")
+        
+        if margins['marginal']:
+            st.warning("⚠️ **Marginally Stable** - System has poles on imaginary axis")
+        elif margins['stable']:
+            if pm is not None and gm is not None:
+                if pm > 60 and gm > 10:
+                    st.success("✅ **Very Stable** - Excellent stability margins")
+                elif pm > 30 and gm > 6:
+                    st.info("📊 **Adequately Stable** - Acceptable for most applications")
+                else:
+                    st.warning("⚠️ **Poor Stability Margins** - System may be oscillatory")
+            else:
+                if margins['min_phase'] > -180:
+                    st.info("📊 **Stable** - Phase never reaches -180°, infinite gain margin")
+                elif np.min(fr['mag_db']) > 0:
+                    st.info("📊 **Stable** - Magnitude never crosses 0dB, infinite phase margin")
+                else:
+                    st.info("📊 **Stable** - System is stable")
+        else:
+            st.error("❌ **UNSTABLE** - System has poles in right half-plane!")
+    
+    with tab3:
+        st.plotly_chart(create_nyquist_plot(fr), use_container_width=True)
+        idx = st.slider("Frequency Index", 0, len(fr['omega'])-1, len(fr['omega'])//2)
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("ω", f"{fr['omega'][idx]:.2f} rad/s")
+        col2.metric("|H|", f"{fr['mag_db'][idx]:.2f} dB")
+        col3.metric("Phase", f"{fr['phase_deg'][idx]:.1f}°")
+        col4.metric("H(jω)", f"{fr['real'][idx]:.3f} + {fr['imag'][idx]:.3f}i")
+    
+    with tab4:
+        st.plotly_chart(create_pole_zero_plot(pz), use_container_width=True)
+        if margins['marginal']:
+            st.warning("⚠️ Marginally Stable")
+        elif margins['stable']:
+            st.success("✅ Stable - All poles in left half-plane")
+        else:
+            st.error("❌ Unstable - Poles in right half-plane")
 
 else:
-    st.info("👈 Load a transfer function from the sidebar!")
+    st.info("👈 Load a transfer function from the sidebar to begin!")
+    
+    st.markdown("""
+    ### 🎯 How to use ControlPlot Studio
+    
+    1. **Choose an input method** from the sidebar
+    2. **Enter your transfer function** or select an example
+    3. **Explore the plots** and **mathematical derivation**
+    
+    ### 📚 Features
+    
+    - 📈 **Bode Plots** with individual pole/zero contributions
+    - 📝 **Mathematical Derivation** showing every step
+    - 🌀 **Nyquist Plots** with interactive frequency slider
+    - 📍 **Pole-Zero Maps** with stability analysis
+    - 📊 **Frequency Response Tables** with actual values
+    - 🎓 **Interpretation** explaining what the numbers mean
+    
+    ### 💡 Try These Examples
+    
+    - **RC Low Pass:** `num=1`, `den=1, 1`
+    - **2 Poles:** `num=10`, `den=1, 3, 2`
+    - **3 Poles:** `num=1`, `den=1, 6, 11, 6`
+    - **RHP Zero:** `num=1, -1`, `den=1, 3, 2`
+    """)
 
 if __name__ == "__main__":
     pass
