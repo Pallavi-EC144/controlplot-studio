@@ -28,7 +28,7 @@ class ControlEngine:
         self.debug_info = {}
         
     def parse_transfer_function(self, num_str, den_str):
-        """Parse transfer function"""
+        """Parse transfer function from polynomial coefficients"""
         try:
             if num_str.strip():
                 num = [float(x.strip()) for x in num_str.split(',') if x.strip()]
@@ -40,6 +40,7 @@ class ControlEngine:
             else:
                 den = [1]
             
+            # Clean trailing zeros
             while len(num) > 1 and abs(num[-1]) < 1e-10:
                 num.pop()
             while len(den) > 1 and abs(den[-1]) < 1e-10:
@@ -51,6 +52,7 @@ class ControlEngine:
             self.zeros = np.roots(num)
             self.gain = num[0] / den[0] if den[0] != 0 else 1
             
+            # Find corner frequencies
             self.corner_freqs = []
             for p in self.poles:
                 if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
@@ -65,8 +67,43 @@ class ControlEngine:
             st.error(f"Error parsing: {str(e)}")
             return False
     
-    def get_frequency_response(self, omega_min=0.001, omega_max=10000, num_points=3000):
-        """Calculate frequency response with proper unwrapping"""
+    def parse_from_builder(self, gain, zeros, poles):
+        """Parse from builder with CORRECT sign convention (s + p)"""
+        try:
+            gain = float(gain)
+            zeros = [float(z) for z in zeros if z and z.strip()]
+            poles = [float(p) for p in poles if p and p.strip()]
+            
+            # Build numerator: (s + z) for each zero
+            num = [gain]
+            for z in zeros:
+                if z != 0:
+                    num = np.convolve(num, [1, z])  # CORRECTED: s + z
+                else:
+                    num = np.convolve(num, [1, 0])  # s (zero at origin)
+                    while len(num) > 1 and abs(num[0]) < 1e-10:
+                        num = num[1:]
+            
+            # Build denominator: (s + p) for each pole
+            den = [1]
+            for p in poles:
+                if p != 0:
+                    den = np.convolve(den, [1, p])  # CORRECTED: s + p
+                else:
+                    den = np.convolve(den, [1, 0])  # s (pole at origin)
+                    while len(den) > 1 and abs(den[0]) < 1e-10:
+                        den = den[1:]
+            
+            num_str = ','.join([str(x) for x in num])
+            den_str = ','.join([str(x) for x in den])
+            
+            return self.parse_transfer_function(num_str, den_str)
+        except Exception as e:
+            st.error(f"Error building: {str(e)}")
+            return False
+    
+    def get_frequency_response(self, omega_min=0.0001, omega_max=100000, num_points=5000):
+        """Calculate frequency response with wider range"""
         omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
         
         # Calculate H(jω)
@@ -77,33 +114,13 @@ class ControlEngine:
         mag_linear = np.abs(H)
         mag_db = 20 * np.log10(mag_linear + 1e-10)
         
-        # Phase - use atan2 and manually track to get correct unwrapping
-        phase_rad = np.arctan2(np.imag(H), np.real(H))
-        
-        # Manual unwrapping - track cumulative phase
-        phase_rad_unwrapped = np.zeros_like(phase_rad)
-        phase_rad_unwrapped[0] = phase_rad[0]
-        for i in range(1, len(phase_rad)):
-            diff = phase_rad[i] - phase_rad[i-1]
-            # Unwrap by adding/subtracting 2π when jumps exceed π
-            if diff > np.pi:
-                phase_rad_unwrapped[i] = phase_rad_unwrapped[i-1] + (diff - 2*np.pi)
-            elif diff < -np.pi:
-                phase_rad_unwrapped[i] = phase_rad_unwrapped[i-1] + (diff + 2*np.pi)
-            else:
-                phase_rad_unwrapped[i] = phase_rad_unwrapped[i-1] + diff
-        
+        # Phase using numpy's unwrap
+        phase_rad = np.unwrap(np.angle(H))
         phase_deg = np.degrees(phase_rad)
-        phase_deg_unwrapped = np.degrees(phase_rad_unwrapped)
         
-        # Store debug info
         self.debug_info = {
-            'min_phase': np.min(phase_deg_unwrapped),
-            'max_phase': np.max(phase_deg_unwrapped),
-            'phase_at_0dB': None,
-            'phase_at_180': None,
-            'gain_crossovers': [],
-            'phase_crossovers': []
+            'min_phase': np.min(phase_deg),
+            'max_phase': np.max(phase_deg),
         }
         
         return {
@@ -111,15 +128,15 @@ class ControlEngine:
             'mag_db': mag_db,
             'mag_linear': mag_linear,
             'phase_deg': phase_deg,
-            'phase_deg_unwrapped': phase_deg_unwrapped,
             'real': np.real(H),
             'imag': np.imag(H)
         }
     
-    def get_asymptotic_response(self, omega_min=0.001, omega_max=10000, num_points=1000):
-        """Calculate asymptotic approximation"""
+    def get_asymptotic_response(self, omega_min=0.0001, omega_max=100000, num_points=1000):
+        """Calculate TRUE asymptotic Bode plot (piecewise)"""
         omega = np.logspace(np.log10(omega_min), np.log10(omega_max), num_points)
         
+        # Start with gain
         mag_asym = np.full(len(omega), 20 * np.log10(abs(self.gain) + 1e-10))
         phase_asym = np.full(len(omega), 0.0 if self.gain > 0 else -180.0)
         
@@ -128,9 +145,12 @@ class ControlEngine:
                 p_real = pole.real
                 if abs(p_real) > 1e-10:
                     omega_c = abs(p_real)
+                    # TRUE ASYMPTOTE: 0 before corner, -20dB/dec after
                     mag_asym -= 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
+                    # TRUE ASYMPTOTE PHASE: 0°, -45° at corner, -90° after
                     phase_asym -= np.degrees(np.arctan2(omega, omega_c))
                 else:
+                    # Integrator: -20dB/dec always
                     mag_asym -= 20 * np.log10(omega + 1e-10)
                     phase_asym -= 90.0
         
@@ -148,76 +168,63 @@ class ControlEngine:
         return {'omega': omega, 'mag_db': mag_asym, 'phase_deg': phase_asym}
     
     def calculate_margins(self):
-        """Calculate gain and phase margins with proper phase tracking"""
+        """Calculate gain and phase margins with proper interpolation"""
         fr = self.get_frequency_response()
         omega = fr['omega']
         mag_db = fr['mag_db']
-        phase_deg_unwrapped = fr['phase_deg_unwrapped']
-        phase_deg_wrapped = fr['phase_deg']
+        phase_deg = fr['phase_deg']
         
         gain_margin = None
         phase_margin = None
         gm_freq = None
         pm_freq = None
         
-        # DEBUG: Print phase info
-        st.sidebar.markdown("### 🔍 Debug Info")
-        st.sidebar.markdown(f"**Min Phase (unwrapped):** {np.min(phase_deg_unwrapped):.1f}°")
-        st.sidebar.markdown(f"**Max Phase (unwrapped):** {np.max(phase_deg_unwrapped):.1f}°")
-        st.sidebar.markdown(f"**Phase crosses -180?** {'✅' if np.min(phase_deg_unwrapped) < -180 else '❌'}")
-        st.sidebar.markdown(f"**Magnitude crosses 0dB?** {'✅' if np.min(mag_db) < 0 < np.max(mag_db) else '❌'}")
-        
-        # FIND PHASE CROSSOVER (-180°)
-        # Use unwrapped phase to detect crossings below -180
-        phase_cross_idx = np.where(np.diff(np.sign(phase_deg_unwrapped + 180)))[0]
+        # Find phase crossover (-180°) with interpolation
+        phase_cross_idx = np.where(np.diff(np.sign(phase_deg + 180)))[0]
         
         if len(phase_cross_idx) > 0:
             idx = phase_cross_idx[0]
             if idx < len(mag_db) - 1:
-                x1, x2 = phase_deg_unwrapped[idx], phase_deg_unwrapped[idx + 1]
+                # Linear interpolation for accuracy
+                x1, x2 = phase_deg[idx], phase_deg[idx + 1]
                 y1, y2 = mag_db[idx], mag_db[idx + 1]
-                # Linear interpolation to find exact -180 crossing
                 if abs(x2 - x1) > 1e-10:
                     t = (-180 - x1) / (x2 - x1)
                     if 0 <= t <= 1:
                         gm = y1 + t * (y2 - y1)
                         gain_margin = -gm
                         gm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
-                        st.sidebar.markdown(f"**Phase Crossover Found!**")
-                        st.sidebar.markdown(f"  ω = {gm_freq:.3f} rad/s")
-                        st.sidebar.markdown(f"  GM = {gain_margin:.2f} dB")
-        else:
-            st.sidebar.markdown("**No phase crossover found** - Phase never reaches -180°")
         
-        # FIND GAIN CROSSOVER (0 dB)
+        # Find gain crossover (0 dB) with interpolation
         gain_cross_idx = np.where(np.diff(np.sign(mag_db)))[0]
         
         if len(gain_cross_idx) > 0:
             idx = gain_cross_idx[0]
-            if idx < len(phase_deg_unwrapped) - 1:
+            if idx < len(phase_deg) - 1:
                 x1, x2 = mag_db[idx], mag_db[idx + 1]
-                y1, y2 = phase_deg_unwrapped[idx], phase_deg_unwrapped[idx + 1]
+                y1, y2 = phase_deg[idx], phase_deg[idx + 1]
                 if abs(x2 - x1) > 1e-10:
                     t = (0 - x1) / (x2 - x1)
                     if 0 <= t <= 1:
                         pm = y1 + t * (y2 - y1)
                         phase_margin = 180 + pm
                         pm_freq = omega[idx] + t * (omega[idx + 1] - omega[idx])
-                        st.sidebar.markdown(f"**Gain Crossover Found!**")
-                        st.sidebar.markdown(f"  ω = {pm_freq:.3f} rad/s")
-                        st.sidebar.markdown(f"  PM = {phase_margin:.2f}°")
-        else:
-            st.sidebar.markdown("**No gain crossover found** - Magnitude never crosses 0dB")
         
-        # Stability decision
-        # System is stable if all poles have negative real parts
-        stable_from_poles = all(p.real < 0 for p in self.poles)
+        # Check stability
+        # For stable systems: all poles have negative real parts
+        # For marginally stable: poles on imaginary axis (allow small tolerance)
+        stable_poles = all(p.real < 1e-10 for p in self.poles)
+        marginal_poles = any(abs(p.real) < 1e-10 and abs(p.imag) > 0 for p in self.poles)
         
-        # And margins indicate stability
+        # Determine stability from margins if they exist
         if gain_margin is not None and phase_margin is not None:
-            stable = stable_from_poles and (gain_margin > 0) and (phase_margin > 0)
+            stable = (gain_margin > 0) and (phase_margin > 0) and stable_poles
+        elif gain_margin is not None:
+            stable = (gain_margin > 0) and stable_poles
+        elif phase_margin is not None:
+            stable = (phase_margin > 0) and stable_poles
         else:
-            stable = stable_from_poles
+            stable = stable_poles
         
         return {
             'gain_margin': gain_margin,
@@ -227,8 +234,9 @@ class ControlEngine:
             'gain_margin_dB': gain_margin if gain_margin is not None else None,
             'phase_margin_deg': phase_margin if phase_margin is not None else None,
             'stable': stable,
-            'min_phase': np.min(phase_deg_unwrapped),
-            'max_phase': np.max(phase_deg_unwrapped)
+            'marginal': marginal_poles,
+            'min_phase': self.debug_info.get('min_phase', 0),
+            'max_phase': self.debug_info.get('max_phase', 0)
         }
     
     def get_pz(self):
@@ -269,7 +277,7 @@ def create_bode_plot(data):
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
                         subplot_titles=('Magnitude Response', 'Phase Response'))
     
-    # Magnitude - Actual (use wrapped phase for display)
+    # Magnitude - Actual
     fig.add_trace(
         go.Scatter(x=fr['omega'], y=fr['mag_db'], mode='lines',
                   name='Actual Magnitude', line=dict(color='#2563eb', width=2.5)),
@@ -283,9 +291,9 @@ def create_bode_plot(data):
         row=1, col=1
     )
     
-    # Phase - Actual (use unwrapped for display)
+    # Phase - Actual
     fig.add_trace(
-        go.Scatter(x=fr['omega'], y=fr['phase_deg_unwrapped'], mode='lines',
+        go.Scatter(x=fr['omega'], y=fr['phase_deg'], mode='lines',
                   name='Actual Phase', line=dict(color='#dc2626', width=2.5)),
         row=2, col=1
     )
@@ -418,8 +426,9 @@ with st.sidebar:
     
     if method == "Direct Entry":
         st.subheader("Transfer Function")
-        num = st.text_input("Numerator (e.g., 10, 20):", value="1")
-        den = st.text_input("Denominator (e.g., 1, 3, 2):", value="1, 6, 11, 6")
+        st.caption("Enter polynomial coefficients (descending powers of s)")
+        num = st.text_input("Numerator:", value="1")
+        den = st.text_input("Denominator:", value="1, 6, 11, 6")
         if st.button("🚀 Generate Plots", use_container_width=True):
             if st.session_state.engine.parse_transfer_function(num, den):
                 st.session_state.loaded = True
@@ -427,66 +436,41 @@ with st.sidebar:
     
     elif method == "Builder Interface":
         st.subheader("Build Your System")
+        st.caption("Enter pole/zero locations (positive numbers = left half-plane)")
+        
         gain = st.number_input("Gain:", value=1.0, step=0.1)
         
-        st.write("**Zeros:**")
+        st.write("**Zeros (s + z):**")
         zeros_input = []
         num_zeros = st.number_input("Number of zeros:", min_value=0, max_value=5, value=0, step=1)
         for i in range(num_zeros):
-            z = st.text_input(f"Zero {i+1}:", value="2" if i == 0 else "")
+            z = st.text_input(f"Zero {i+1} (enter positive number):", value="2" if i == 0 else "")
             zeros_input.append(z)
         
-        st.write("**Poles:**")
+        st.write("**Poles (s + p):**")
         poles_input = []
         num_poles = st.number_input("Number of poles:", min_value=0, max_value=5, value=3, step=1)
         for i in range(num_poles):
-            p = st.text_input(f"Pole {i+1}:", value="1" if i == 0 else "2" if i == 1 else "3")
+            p = st.text_input(f"Pole {i+1} (enter positive number):", value="1" if i == 0 else "2" if i == 1 else "3")
             poles_input.append(p)
         
         if st.button("🏗️ Build & Generate", use_container_width=True):
-            try:
-                z_vals = [float(x) for x in zeros_input if x.strip()]
-                p_vals = [float(x) for x in poles_input if x.strip()]
-                
-                num = [gain]
-                for z in z_vals:
-                    if z != 0:
-                        num = np.convolve(num, [1, -z])
-                    else:
-                        num = np.convolve(num, [0, 1])
-                        while len(num) > 1 and abs(num[0]) < 1e-10:
-                            num = num[1:]
-                
-                den = [1]
-                for p in p_vals:
-                    if p != 0:
-                        den = np.convolve(den, [1, -p])
-                    else:
-                        den = np.convolve(den, [0, 1])
-                        while len(den) > 1 and abs(den[0]) < 1e-10:
-                            den = den[1:]
-                
-                num_str = ','.join([str(x) for x in num])
-                den_str = ','.join([str(x) for x in den])
-                
-                if st.session_state.engine.parse_transfer_function(num_str, den_str):
-                    st.session_state.loaded = True
-                    st.success("✅ Built!")
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
+            if st.session_state.engine.parse_from_builder(gain, zeros_input, poles_input):
+                st.session_state.loaded = True
+                st.success("✅ Built!")
     
     else:
         st.subheader("Pre-built Examples")
         examples = {
-            "3 Poles": {"num": "1", "den": "1, 6, 11, 6"},
-            "RHP Zero": {"num": "1, -1", "den": "1, 3, 2"},
+            "3 Poles (s+1)(s+2)(s+3)": {"num": "1", "den": "1, 6, 11, 6"},
+            "RHP Zero (unstable zero)": {"num": "1, -1", "den": "1, 3, 2"},
             "Integrator + Poles": {"num": "10", "den": "1, 10, 0"},
             "High Gain": {"num": "100", "den": "1, 10, 20, 1"},
             "4th Order": {"num": "1", "den": "1, 10, 35, 50, 24"},
             "Underdamped": {"num": "1", "den": "1, 1, 100"},
             "Unstable": {"num": "1", "den": "1, -1, 100"},
-            "Band Pass": {"num": "10, 0", "den": "1, 2, 100"},
-            "RC Low Pass": {"num": "1", "den": "1, 1"}
+            "RC Low Pass": {"num": "1", "den": "1, 1"},
+            "PID Controller": {"num": "100, 10, 1", "den": "1, 0"}
         }
         for name, tf in examples.items():
             if st.button(f"📂 {name}", use_container_width=True):
@@ -514,12 +498,17 @@ if st.session_state.loaded:
         
         st.latex(f"H(s) = \\frac{{{num_str}}}{{{den_str}}}")
         
-        # Show debug info from sidebar
+        # Debug info in sidebar
         st.sidebar.markdown("---")
-        st.sidebar.markdown(f"**Poles:** {engine.poles}")
-        st.sidebar.markdown(f"**Zeros:** {engine.zeros}")
-        st.sidebar.markdown(f"**Gain:** {engine.gain:.3f}")
+        st.sidebar.markdown("### 🔍 System Info")
+        st.sidebar.markdown(f"**Poles:** {[f'{p:.2f}' for p in engine.poles]}")
+        st.sidebar.markdown(f"**Zeros:** {[f'{z:.2f}' for z in engine.zeros]}")
+        st.sidebar.markdown(f"**Gain K:** {engine.gain:.3f}")
         st.sidebar.markdown(f"**Corner Freqs:** {engine.corner_freqs}")
+        st.sidebar.markdown(f"**Min Phase:** {margins['min_phase']:.1f}°")
+        st.sidebar.markdown(f"**Max Phase:** {margins['max_phase']:.1f}°")
+        st.sidebar.markdown(f"**Phase reaches -180°:** {'✅' if margins['min_phase'] < -180 else '❌'}")
+        st.sidebar.markdown(f"**Magnitude crosses 0dB:** {'✅' if np.min(fr['mag_db']) < 0 < np.max(fr['mag_db']) else '❌'}")
         
         # Tabs
         tab1, tab2, tab3 = st.tabs(["📈 Bode Plot", "🌀 Nyquist Plot", "📍 Pole-Zero Map"])
@@ -536,18 +525,20 @@ if st.session_state.loaded:
             pm_str = f"{pm:.2f}°" if pm is not None else "∞"
             
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("Stability", "✅ Stable" if margins['stable'] else "❌ Unstable")
+            if margins['marginal']:
+                c1.metric("Stability", "⚠️ Marginally Stable")
+            else:
+                c1.metric("Stability", "✅ Stable" if margins['stable'] else "❌ Unstable")
             c2.metric("Gain Margin", gm_str)
             c3.metric("Phase Margin", pm_str)
             c4.metric("GM Frequency", f"{margins['gm_freq']:.2f} rad/s" if margins['gm_freq'] else "None")
             c5.metric("PM Frequency", f"{margins['pm_freq']:.2f} rad/s" if margins['pm_freq'] else "None")
             
-            # Show min phase info
-            st.caption(f"📐 Minimum unwrapped phase: {margins['min_phase']:.1f}°")
-            
             # Interpretation
             st.subheader("📖 Interpretation")
-            if margins['stable']:
+            if margins['marginal']:
+                st.warning("⚠️ **Marginally Stable** - System has poles on imaginary axis (e.g., integrator)")
+            elif margins['stable']:
                 if pm is not None and gm is not None:
                     if pm > 60 and gm > 10:
                         st.success("✅ **Very Stable** - Excellent margins")
@@ -572,13 +563,15 @@ if st.session_state.loaded:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("ω", f"{fr['omega'][idx]:.2f} rad/s")
             c2.metric("Magnitude", f"{fr['mag_db'][idx]:.2f} dB")
-            c3.metric("Phase", f"{fr['phase_deg_unwrapped'][idx]:.1f}°")
+            c3.metric("Phase", f"{fr['phase_deg'][idx]:.1f}°")
             c4.metric("H(jω)", f"{fr['real'][idx]:.3f} + {fr['imag'][idx]:.3f}i")
         
         with tab3:
             st.plotly_chart(create_pole_zero_plot(pz), use_container_width=True)
             
-            if margins['stable']:
+            if margins['marginal']:
+                st.warning("⚠️ System has poles on imaginary axis - marginally stable")
+            elif margins['stable']:
                 st.success("✅ System is **stable** - all poles in left half-plane")
             else:
                 st.error("⚠️ System is **unstable** - pole(s) in right half-plane")
@@ -599,12 +592,13 @@ else:
     
     ### ✅ Test Examples with Finite Margins
     
-    | System | Numerator | Denominator | GM | PM |
-    |--------|-----------|-------------|----|----|
+    | System | Numerator | Denominator | Expected GM | Expected PM |
+    |--------|-----------|-------------|-------------|-------------|
     | 3 Poles | `1` | `1, 6, 11, 6` | ~30 dB | ~60° |
     | RHP Zero | `1, -1` | `1, 3, 2` | ~10 dB | ~20° |
     | Integrator+Poles | `10` | `1, 10, 0` | ~20 dB | ~45° |
     | High Gain | `100` | `1, 10, 20, 1` | ~20 dB | ~45° |
+    | 4th Order | `1` | `1, 10, 35, 50, 24` | ~25 dB | ~50° |
     """)
 
 if __name__ == "__main__":
