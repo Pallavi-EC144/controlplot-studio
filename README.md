@@ -1,6 +1,6 @@
 # ControlPlot Studio 🎛️
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://your-app-name.streamlit.app)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://controlplot-studio.streamlit.app/)
 
 An interactive control system visualization platform built with Streamlit.
 
@@ -19,13 +19,13 @@ An interactive control system visualization platform built with Streamlit.
 
 ## Demo
 
-[Live Demo](https://your-app-name.streamlit.app)
+[Live Demo](https://controlplot-studio.streamlit.app/)
 
 ## Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/controlplot-studio.git
+git clone https: https://github.com/Pallavi-EC144
 cd controlplot-studio
 
 # Install dependencies
