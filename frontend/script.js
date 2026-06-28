@@ -404,4 +404,80 @@ function displayStabilityInfo(data) {
         const maxMag = Math.max(...freq.mag_db);
         const minMag = Math.min(...freq.mag_db);
         
-        html
+        html += `
+            <div class="info-item">
+                <span class="info-label">Magnitude Range:</span>
+                <span class="info-value">${minMag.toFixed(2)} dB to ${maxMag.toFixed(2)} dB</span>
+            </div>
+        `;
+    }
+    
+    container.innerHTML = html;
+}
+
+// Tab switching
+function showTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+    
+    // Show selected tab
+    document.getElementById(`${tabName}-tab`).classList.add('active');
+    
+    // Update button
+    document.querySelector(`.tab-btn[onclick="showTab('${tabName}')"]`).classList.add('active');
+    
+    // Resize plots if needed
+    setTimeout(() => {
+        if (tabName === 'nyquist' && nyquistPlot) {
+            Plotly.Plots.resize('nyquist-plot');
+        } else if (tabName === 'polezero' && poleZeroPlot) {
+            Plotly.Plots.resize('polezero-plot');
+        } else if (tabName === 'bode') {
+            if (bodeMagnitudePlot) Plotly.Plots.resize('bode-magnitude');
+            if (bodePhasePlot) Plotly.Plots.resize('bode-phase');
+        }
+    }, 100);
+}
+
+// Add zero/pole inputs
+function addZero() {
+    const container = document.getElementById('zeros-container');
+    const row = document.createElement('div');
+    row.className = 'builder-row';
+    row.innerHTML = `
+        <input type="text" class="zero-input" placeholder="Zero value">
+        <button onclick="removeRow(this)">×</button>
+    `;
+    container.appendChild(row);
+}
+
+function addPole() {
+    const container = document.getElementById('poles-container');
+    const row = document.createElement('div');
+    row.className = 'builder-row';
+    row.innerHTML = `
+        <input type="text" class="pole-input" placeholder="Pole value">
+        <button onclick="removeRow(this)">×</button>
+    `;
+    container.appendChild(row);
+}
+
+function removeRow(btn) {
+    btn.parentElement.remove();
+}
+
+// Load example
+function loadExample(name) {
+    const example = examples[name];
+    if (!example) return;
+    
+    document.getElementById('numerator-input').value = example.num;
+    document.getElementById('denominator-input').value = example.den;
+    loadTransferFunction();
+}
+
+// Initialize with default example
+window.onload = function() {
+    loadTransferFunction();
+};
