@@ -1,10 +1,10 @@
 import streamlit as st
 import numpy as np
+import scipy as sp
 from scipy import signal
-import sympy as sp
+import sympy as sym
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import json
 import math
 
 # Set page config
