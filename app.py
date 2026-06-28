@@ -1,6 +1,5 @@
 import streamlit as st
 import numpy as np
-from scipy import signal
 import sympy as sp
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -93,7 +92,7 @@ class ControlEngine:
             self.den = den
             self.gain = num[0] / den[0] if den[0] != 0 else 1
             
-            # Find poles and zeros
+            # Find poles and zeros using numpy
             self.poles = np.roots(den)
             self.zeros = np.roots(num)
             
