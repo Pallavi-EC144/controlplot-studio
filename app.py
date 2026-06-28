@@ -31,7 +31,8 @@ class ControlEngine:
             self.poles = np.roots(den)
             self.zeros = np.roots(num)
             return True
-        except:
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
             return False
     
     def get_freq_response(self, n=1000):
@@ -48,25 +49,32 @@ class ControlEngine:
     
     def get_asymptotic(self, n=1000):
         omega = np.logspace(-2, 4, n)
-        mag = np.full(n, 20*np.log10(abs(self.gain)))
-        phase = np.full(n, 0 if self.gain > 0 else -180)
+        mag = np.full(n, 20*np.log10(abs(self.gain) + 1e-10))
+        phase = np.full(n, 0.0 if self.gain > 0 else -180.0)
         
         for p in self.poles:
-            if abs(p.imag) < 1e-10 and abs(p.real) > 1e-10:
-                mag -= 20*np.log10(np.sqrt(1 + (omega/abs(p.real))**2))
-                phase -= np.degrees(np.arctan(omega/abs(p.real)))
-            elif abs(p.imag) < 1e-10:
-                mag -= 20*np.log10(omega)
-                phase -= 90
-                
+            if abs(p.imag) < 1e-10:  # Real pole
+                p_real = p.real
+                if abs(p_real) > 1e-10:
+                    omega_c = abs(p_real)
+                    # Use np.arctan2 to avoid division issues
+                    mag -= 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
+                    phase -= np.degrees(np.arctan2(omega, omega_c))
+                else:  # Pole at origin
+                    mag -= 20 * np.log10(omega + 1e-10)
+                    phase -= 90.0
+        
         for z in self.zeros:
-            if abs(z.imag) < 1e-10 and abs(z.real) > 1e-10:
-                mag += 20*np.log10(np.sqrt(1 + (omega/abs(z.real))**2))
-                phase += np.degrees(np.arctan(omega/abs(z.real)))
-            elif abs(z.imag) < 1e-10:
-                mag += 20*np.log10(omega)
-                phase += 90
-                
+            if abs(z.imag) < 1e-10:  # Real zero
+                z_real = z.real
+                if abs(z_real) > 1e-10:
+                    omega_c = abs(z_real)
+                    mag += 20 * np.log10(np.sqrt(1 + (omega/omega_c)**2))
+                    phase += np.degrees(np.arctan2(omega, omega_c))
+                else:  # Zero at origin
+                    mag += 20 * np.log10(omega + 1e-10)
+                    phase += 90.0
+        
         return {'omega': omega, 'mag_db': mag, 'phase_deg': phase}
     
     def get_pz(self):
@@ -74,16 +82,16 @@ class ControlEngine:
         zeros_data = []
         for p in self.poles:
             if abs(p.imag) < 1e-10:
-                poles_data.append({'real': p.real, 'imag': 0})
+                poles_data.append({'real': float(p.real), 'imag': 0.0})
             else:
-                poles_data.append({'real': p.real, 'imag': p.imag})
-                poles_data.append({'real': p.real, 'imag': -p.imag})
+                poles_data.append({'real': float(p.real), 'imag': float(p.imag)})
+                poles_data.append({'real': float(p.real), 'imag': float(-p.imag)})
         for z in self.zeros:
             if abs(z.imag) < 1e-10:
-                zeros_data.append({'real': z.real, 'imag': 0})
+                zeros_data.append({'real': float(z.real), 'imag': 0.0})
             else:
-                zeros_data.append({'real': z.real, 'imag': z.imag})
-                zeros_data.append({'real': z.real, 'imag': -z.imag})
+                zeros_data.append({'real': float(z.real), 'imag': float(z.imag)})
+                zeros_data.append({'real': float(z.real), 'imag': float(-z.imag)})
         return {'poles': poles_data, 'zeros': zeros_data}
     
     def get_stability(self):
@@ -133,30 +141,37 @@ with st.sidebar:
             poles_input.append(p)
         
         if st.button("🏗️ Build & Generate", use_container_width=True):
-            z_vals = [float(x) for x in zeros_input if x.strip()]
-            p_vals = [float(x) for x in poles_input if x.strip()]
-            
-            num = [gain]
-            for z in z_vals:
-                if z != 0:
-                    num = np.convolve(num, [1, -z])
-                else:
-                    num = np.convolve(num, [0, 1])
-            
-            den = [1]
-            for p in p_vals:
-                if p != 0:
-                    den = np.convolve(den, [1, -p])
-                else:
-                    den = np.convolve(den, [0, 1])
-            
-            st.session_state.engine.num = num.tolist()
-            st.session_state.engine.den = den.tolist()
-            st.session_state.engine.poles = p_vals
-            st.session_state.engine.zeros = z_vals
-            st.session_state.engine.gain = gain
-            st.session_state.loaded = True
-            st.success("✅ Built!")
+            try:
+                z_vals = [float(x) for x in zeros_input if x.strip()]
+                p_vals = [float(x) for x in poles_input if x.strip()]
+                
+                num = [gain]
+                for z in z_vals:
+                    if z != 0:
+                        num = np.convolve(num, [1, -z])
+                    else:
+                        num = np.convolve(num, [0, 1])
+                        while len(num) > 1 and abs(num[0]) < 1e-10:
+                            num = num[1:]
+                
+                den = [1]
+                for p in p_vals:
+                    if p != 0:
+                        den = np.convolve(den, [1, -p])
+                    else:
+                        den = np.convolve(den, [0, 1])
+                        while len(den) > 1 and abs(den[0]) < 1e-10:
+                            den = den[1:]
+                
+                st.session_state.engine.num = num.tolist()
+                st.session_state.engine.den = den.tolist()
+                st.session_state.engine.poles = p_vals
+                st.session_state.engine.zeros = z_vals
+                st.session_state.engine.gain = gain
+                st.session_state.loaded = True
+                st.success("✅ Built!")
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
     
     else:
         st.subheader("Pre-built Examples")
@@ -175,95 +190,105 @@ with st.sidebar:
 
 if st.session_state.loaded:
     engine = st.session_state.engine
-    fr = engine.get_freq_response()
-    asym = engine.get_asymptotic()
-    pz = engine.get_pz()
-    stab = engine.get_stability()
     
-    # Show current system
-    num_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(engine.num)) if abs(c) > 1e-10])
-    den_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(engine.den)) if abs(c) > 1e-10])
-    st.latex(f"H(s) = \\frac{{{num_str}}}{{{den_str}}}")
+    try:
+        fr = engine.get_freq_response()
+        asym = engine.get_asymptotic()
+        pz = engine.get_pz()
+        stab = engine.get_stability()
+        
+        # Show current system
+        num_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(engine.num)) if abs(c) > 1e-10])
+        den_str = " + ".join([f"{c}s^{i}" for i, c in enumerate(reversed(engine.den)) if abs(c) > 1e-10])
+        if not num_str:
+            num_str = "0"
+        if not den_str:
+            den_str = "0"
+        st.latex(f"H(s) = \\frac{{{num_str}}}{{{den_str}}}")
+        
+        tab1, tab2, tab3 = st.tabs(["📈 Bode Plot", "🌀 Nyquist Plot", "📍 Pole-Zero Map"])
+        
+        with tab1:
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                                subplot_titles=('Magnitude Response', 'Phase Response'))
+            
+            fig.add_trace(go.Scatter(x=fr['omega'], y=fr['mag_db'], mode='lines',
+                                     name='Actual Magnitude', line=dict(color='#2563eb', width=2)), row=1, col=1)
+            fig.add_trace(go.Scatter(x=asym['omega'], y=asym['mag_db'], mode='lines',
+                                     name='Asymptotic', line=dict(color='#22c55e', width=1.5, dash='dash')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=fr['omega'], y=fr['phase_deg'], mode='lines',
+                                     name='Actual Phase', line=dict(color='#dc2626', width=2)), row=2, col=1)
+            fig.add_trace(go.Scatter(x=asym['omega'], y=asym['phase_deg'], mode='lines',
+                                     name='Asymptotic Phase', line=dict(color='#f59e0b', width=1.5, dash='dash')), row=2, col=1)
+            
+            fig.update_xaxes(type='log', title_text='Frequency (rad/s)', gridcolor='#f0f0f0', row=2, col=1)
+            fig.update_xaxes(type='log', showticklabels=False, gridcolor='#f0f0f0', row=1, col=1)
+            fig.update_yaxes(title_text='Magnitude (dB)', gridcolor='#f0f0f0', row=1, col=1)
+            fig.update_yaxes(title_text='Phase (degrees)', gridcolor='#f0f0f0', row=2, col=1)
+            fig.update_layout(height=600, hovermode='closest', showlegend=True)
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Metrics
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Status", "✅ Stable" if stab['stable'] else "❌ Unstable")
+            c2.metric("Gain Margin", "∞")
+            c3.metric("Phase Margin", "∞")
+        
+        with tab2:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=fr['real'], y=fr['imag'], mode='lines',
+                                     name='Nyquist Plot', line=dict(color='#7c3aed', width=2)))
+            fig.add_trace(go.Scatter(x=[fr['real'][0]], y=[fr['imag'][0]], mode='markers',
+                                     name='ω → 0', marker=dict(color='#22c55e', size=12, symbol='circle')))
+            fig.add_trace(go.Scatter(x=[fr['real'][-1]], y=[fr['imag'][-1]], mode='markers',
+                                     name='ω → ∞', marker=dict(color='#ef4444', size=12, symbol='x')))
+            
+            theta = np.linspace(0, 2*np.pi, 100)
+            fig.add_trace(go.Scatter(x=np.cos(theta), y=np.sin(theta), mode='lines',
+                                     name='Unit Circle', line=dict(color='#ccc', width=1, dash='dot'), showlegend=False))
+            
+            fig.update_layout(title='Nyquist Plot', height=500, hovermode='closest',
+                              xaxis=dict(title='Real', gridcolor='#f0f0f0', scaleanchor='y', scaleratio=1),
+                              yaxis=dict(title='Imaginary', gridcolor='#f0f0f0'))
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Frequency slider
+            idx = st.slider("Frequency", 0, len(fr['omega'])-1, len(fr['omega'])//2)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("ω", f"{fr['omega'][idx]:.2f} rad/s")
+            c2.metric("Magnitude", f"{fr['mag_db'][idx]:.2f} dB")
+            c3.metric("Phase", f"{fr['phase_deg'][idx]:.1f}°")
+            c4.metric("H(jω)", f"{fr['real'][idx]:.3f} + {fr['imag'][idx]:.3f}i")
+        
+        with tab3:
+            fig = go.Figure()
+            
+            if pz['poles']:
+                fig.add_trace(go.Scatter(x=[p['real'] for p in pz['poles']], y=[p['imag'] for p in pz['poles']],
+                                         mode='markers', name='Poles',
+                                         marker=dict(color='#ef4444', size=14, symbol='x')))
+            if pz['zeros']:
+                fig.add_trace(go.Scatter(x=[z['real'] for z in pz['zeros']], y=[z['imag'] for z in pz['zeros']],
+                                         mode='markers', name='Zeros',
+                                         marker=dict(color='#2563eb', size=14, symbol='circle-open')))
+            
+            theta = np.linspace(0, 2*np.pi, 100)
+            fig.add_trace(go.Scatter(x=np.cos(theta), y=np.sin(theta), mode='lines',
+                                     name='Unit Circle', line=dict(color='#ccc', width=1, dash='dot'), showlegend=False))
+            
+            fig.update_layout(title='Pole-Zero Map', height=500, hovermode='closest',
+                              xaxis=dict(title='Real', gridcolor='#f0f0f0', scaleanchor='y', scaleratio=1),
+                              yaxis=dict(title='Imaginary', gridcolor='#f0f0f0'))
+            st.plotly_chart(fig, use_container_width=True)
+            
+            if stab['stable']:
+                st.success("✅ System is **stable** - all poles in left half-plane")
+            else:
+                st.error("⚠️ System is **unstable** - pole(s) in right half-plane")
     
-    tab1, tab2, tab3 = st.tabs(["📈 Bode Plot", "🌀 Nyquist Plot", "📍 Pole-Zero Map"])
-    
-    with tab1:
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-                            subplot_titles=('Magnitude Response', 'Phase Response'))
-        
-        fig.add_trace(go.Scatter(x=fr['omega'], y=fr['mag_db'], mode='lines',
-                                 name='Actual Magnitude', line=dict(color='#2563eb', width=2)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=asym['omega'], y=asym['mag_db'], mode='lines',
-                                 name='Asymptotic', line=dict(color='#22c55e', width=1.5, dash='dash')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=fr['omega'], y=fr['phase_deg'], mode='lines',
-                                 name='Actual Phase', line=dict(color='#dc2626', width=2)), row=2, col=1)
-        fig.add_trace(go.Scatter(x=asym['omega'], y=asym['phase_deg'], mode='lines',
-                                 name='Asymptotic Phase', line=dict(color='#f59e0b', width=1.5, dash='dash')), row=2, col=1)
-        
-        fig.update_xaxes(type='log', title_text='Frequency (rad/s)', gridcolor='#f0f0f0', row=2, col=1)
-        fig.update_xaxes(type='log', showticklabels=False, gridcolor='#f0f0f0', row=1, col=1)
-        fig.update_yaxes(title_text='Magnitude (dB)', gridcolor='#f0f0f0', row=1, col=1)
-        fig.update_yaxes(title_text='Phase (degrees)', gridcolor='#f0f0f0', row=2, col=1)
-        fig.update_layout(height=600, hovermode='closest', showlegend=True)
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Metrics
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Status", "✅ Stable" if stab['stable'] else "❌ Unstable")
-        c2.metric("Gain Margin", "∞")
-        c3.metric("Phase Margin", "∞")
-    
-    with tab2:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=fr['real'], y=fr['imag'], mode='lines',
-                                 name='Nyquist Plot', line=dict(color='#7c3aed', width=2)))
-        fig.add_trace(go.Scatter(x=[fr['real'][0]], y=[fr['imag'][0]], mode='markers',
-                                 name='ω → 0', marker=dict(color='#22c55e', size=12, symbol='circle')))
-        fig.add_trace(go.Scatter(x=[fr['real'][-1]], y=[fr['imag'][-1]], mode='markers',
-                                 name='ω → ∞', marker=dict(color='#ef4444', size=12, symbol='x')))
-        
-        theta = np.linspace(0, 2*np.pi, 100)
-        fig.add_trace(go.Scatter(x=np.cos(theta), y=np.sin(theta), mode='lines',
-                                 name='Unit Circle', line=dict(color='#ccc', width=1, dash='dot'), showlegend=False))
-        
-        fig.update_layout(title='Nyquist Plot', height=500, hovermode='closest',
-                          xaxis=dict(title='Real', gridcolor='#f0f0f0', scaleanchor='y', scaleratio=1),
-                          yaxis=dict(title='Imaginary', gridcolor='#f0f0f0'))
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Frequency slider
-        idx = st.slider("Frequency", 0, len(fr['omega'])-1, len(fr['omega'])//2)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("ω", f"{fr['omega'][idx]:.2f} rad/s")
-        c2.metric("Magnitude", f"{fr['mag_db'][idx]:.2f} dB")
-        c3.metric("Phase", f"{fr['phase_deg'][idx]:.1f}°")
-        c4.metric("H(jω)", f"{fr['real'][idx]:.3f} + {fr['imag'][idx]:.3f}i")
-    
-    with tab3:
-        fig = go.Figure()
-        
-        if pz['poles']:
-            fig.add_trace(go.Scatter(x=[p['real'] for p in pz['poles']], y=[p['imag'] for p in pz['poles']],
-                                     mode='markers', name='Poles',
-                                     marker=dict(color='#ef4444', size=14, symbol='x')))
-        if pz['zeros']:
-            fig.add_trace(go.Scatter(x=[z['real'] for z in pz['zeros']], y=[z['imag'] for z in pz['zeros']],
-                                     mode='markers', name='Zeros',
-                                     marker=dict(color='#2563eb', size=14, symbol='circle-open')))
-        
-        theta = np.linspace(0, 2*np.pi, 100)
-        fig.add_trace(go.Scatter(x=np.cos(theta), y=np.sin(theta), mode='lines',
-                                 name='Unit Circle', line=dict(color='#ccc', width=1, dash='dot'), showlegend=False))
-        
-        fig.update_layout(title='Pole-Zero Map', height=500, hovermode='closest',
-                          xaxis=dict(title='Real', gridcolor='#f0f0f0', scaleanchor='y', scaleratio=1),
-                          yaxis=dict(title='Imaginary', gridcolor='#f0f0f0'))
-        st.plotly_chart(fig, use_container_width=True)
-        
-        if stab['stable']:
-            st.success("✅ System is **stable** - all poles in left half-plane")
-        else:
-            st.error("⚠️ System is **unstable** - pole(s) in right half-plane")
+    except Exception as e:
+        st.error(f"Error generating plots: {str(e)}")
+        st.info("Try using a different transfer function or check your input format.")
 
 else:
     st.info("👈 Please load a transfer function from the sidebar to begin!")
